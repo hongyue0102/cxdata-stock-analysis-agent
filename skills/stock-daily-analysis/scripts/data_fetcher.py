@@ -25,6 +25,30 @@ SKILL_DIR = os.environ.get('SKI_STOCK_MARKET_INFO_PATH', _DEFAULT_SKILL_DIR)
 # api_query.py 路径
 API_QUERY_SCRIPT = os.path.join(SKILL_DIR, 'scripts', 'api_query.py')
 
+# .env 路径
+_ENV_FILE = os.path.join(SKILL_DIR, 'scripts', '.env')
+
+
+def _setup_key_interactively():
+    """首次运行时交互式引导用户配置密钥，自动写入 .env"""
+    print("未配置 CXDA_USER_KEY，首次使用需要设置密钥。")
+    print("前往 https://yun.ccxe.com.cn/data/Skills 申请（推广期可免费试用）")
+    print()
+    try:
+        user_key = input("请输入你的 CXDA_USER_KEY: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n已取消。请手动在 skills/stock-market-information/scripts/.env 中配置密钥。")
+        return False
+    if not user_key:
+        print("未输入密钥，退出。")
+        return False
+    with open(_ENV_FILE, "w", encoding="utf-8") as f:
+        f.write("BASE_URL=http://cxapi.ccxe.com.cn/cxda\n")
+        f.write(f"CXDA_USER_KEY={user_key}\n")
+    print(f"✓ 密钥已保存到 {_ENV_FILE}，下次无需再配")
+    print()
+    return True
+
 
 def _check_data_source() -> Optional[str]:
     """检查内置数据源 skill 是否可用，不可用则返回错误提示"""
@@ -33,13 +57,22 @@ def _check_data_source() -> Optional[str]:
             f"内置数据源脚本不存在: {API_QUERY_SCRIPT}\n"
             "请确认 skills/stock-market-information 目录完整。"
         )
-    env_file = os.path.join(SKILL_DIR, 'scripts', '.env')
-    if not os.path.exists(env_file):
-        return (
-            f"数据源配置文件不存在: {env_file}\n"
-            "请在 skills/stock-market-information/scripts/.env 中配置 CXDA_USER_KEY 和 BASE_URL。\n"
-            "密钥申请地址: https://yun.ccxe.com.cn/data/Skills （平台推广期，可免费试用）"
-        )
+    if not os.path.exists(_ENV_FILE):
+        # 首次配置引导
+        if not _setup_key_interactively():
+            return (
+                "请在 skills/stock-market-information/scripts/.env 中配置 CXDA_USER_KEY。\n"
+                "密钥申请地址: https://yun.ccxe.com.cn/data/Skills （平台推广期，可免费试用）"
+            )
+    # 检查 .env 中是否真的有密钥
+    with open(_ENV_FILE, encoding="utf-8") as f:
+        content = f.read()
+    if "your_user_key_here" in content or "CXDA_USER_KEY" not in content:
+        if not _setup_key_interactively():
+            return (
+                "请在 skills/stock-market-information/scripts/.env 中配置 CXDA_USER_KEY。\n"
+                "密钥申请地址: https://yun.ccxe.com.cn/data/Skills （平台推广期，可免费试用）"
+            )
     return None
 
 

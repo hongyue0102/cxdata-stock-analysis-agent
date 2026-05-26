@@ -30,7 +30,7 @@ Agent 会自动：获取数据 → 计算指标 → AI 解读 → 生成报告
 ## 目录结构
 
 ```
-stock-analysis-agent/
+cxdata-stock-analysis-agent/
 ├── AGENT.md              # Agent 整体人设与执行逻辑
 ├── SOUL.md               # 身份、性格、能力边界
 ├── rules.md              # 硬性规则

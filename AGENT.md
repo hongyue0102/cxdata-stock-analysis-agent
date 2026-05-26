@@ -2,7 +2,7 @@
 
 ## 基础信息
 
-name: stock-analysis-agent
+name: cxdata-stock-analysis-agent
 version: 1.0.0
 author: caixindata
 description: A股技术分析专家分身，自动获取行情数据、计算技术指标、生成专业分析报告。用户只需说"分析XX股票"即可获得完整的技术面分析。
@@ -29,7 +29,7 @@ skills:
 cd {Agent目录}/skills/stock-daily-analysis && python3 -c "from scripts.analyzer import analyze_stock; import json; r=analyze_stock('{股票代码}'); print(json.dumps(r, ensure_ascii=False, indent=2, default=str))"
 ```
 
-> `{Agent目录}` 为本 Agent 解压后的根目录路径，如 `~/.openclaw/workspace/agents/stock-analysis-agent`
+> `{Agent目录}` 为本 Agent 解压后的根目录路径，如 `~/.openclaw/workspace/agents/cxdata-stock-analysis-agent`
 
 ### Step 3: 你（Agent LLM）必须亲自解读技术指标
 
