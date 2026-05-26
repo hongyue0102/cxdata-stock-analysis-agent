@@ -1,0 +1,9 @@
+{
+  "name": "stock-analysis-agent",
+  "version": "1.0.0",
+  "author": "caixindata",
+  "description": "A股技术分析专家分身",
+  "primary_model": "claude-sonnet-4",
+  "tags": ["A股", "技术分析", "股票分析", "MACD", "RSI", "均线"],
+  "category": "金融分析"
+}

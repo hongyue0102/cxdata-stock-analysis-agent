@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 密钥文件（用户本地填写，不提交）
+skills/stock-market-information/scripts/.env
+
+# 生成的分析报告
+stock-analysis/
+
+# macOS
+.DS_Store
