@@ -22,9 +22,9 @@ Agent 会自动：获取数据 → 计算指标 → AI 解读 → 生成报告
 ## 前置依赖
 
 1. 安装 Python 依赖：`pip install pandas numpy requests python-dotenv`
-2. 配置数据源密钥：
+2. 首次运行时自动引导配置密钥：
    - 前往 [财新数据平台](https://yun.ccxe.com.cn/data/Skills) 注册并申请 `CXDA_USER_KEY`（**平台目前处于推广期，可免费试用**）
-   - 将密钥填入 `skills/stock-market-information/scripts/.env` 中的 `CXDA_USER_KEY` 字段
+   - 首次执行分析时会提示输入密钥，自动保存，以后无需再配
    - 数据源 Skill 已内置在 Agent 中，无需额外下载
 
 ## 目录结构
