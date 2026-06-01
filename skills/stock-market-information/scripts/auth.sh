@@ -11,7 +11,7 @@ fi
 
 # 获取authtoken
 get_authtoken() {
-    local token=$(curl -s "${BASE_URL}/webservice/foreign_getAuthtoken.htm?userKey=${USER_KEY}" | grep -o '"authtoken":"[^"]*"' | cut -d'"' -f4)
+    local token=$(curl -s "${BASE_URL}/webservice/foreign_getAuthtoken.htm?userKey=${CXDA_USER_KEY}" | grep -o '"authtoken":"[^"]*"' | cut -d'"' -f4)
     echo "$token"
 }
 
