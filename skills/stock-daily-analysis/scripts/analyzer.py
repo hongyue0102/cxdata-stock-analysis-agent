@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # 导入模块
 from scripts.data_fetcher import get_daily_data
-from scripts.trend_analyzer import StockTrendAnalyzer
+from scripts.trend_analyzer import StockTrendAnalyzer, _get_limit_pct
 from scripts.ai_analyzer import AIAnalyzer
 from scripts.notifier import AnalysisReport, format_analysis_report, format_dashboard_report
 
@@ -78,7 +78,7 @@ def analyze_stock(code: str, config: Optional[Dict] = None) -> Dict[str, Any]:
 
     # 技术分析
     analyzer = StockTrendAnalyzer()
-    trend_result = analyzer.analyze(df, code)
+    trend_result = analyzer.analyze(df, code, name)
 
     # 整理技术指标 + 生成供外层 Agent LLM 使用的 prompt
     ai_analyzer = AIAnalyzer()
@@ -182,7 +182,7 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
 
     # 2. 技术分析
     trend_analyzer = StockTrendAnalyzer()
-    trend_result = trend_analyzer.analyze(df, code)
+    trend_result = trend_analyzer.analyze(df, code, name)
     tech = trend_result.to_dict()
 
     # 3. 整理技术面结果
@@ -343,13 +343,14 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     lines.append("| 日期 | 开盘 | 最高 | 最低 | 收盘 | 涨跌幅 | 成交量 | 成交额 |")
     lines.append("|------|------|------|------|------|--------|--------|--------|")
 
+    pct_highlight = _get_limit_pct(code, name) * 0.5
     for _, row in df.iloc[::-1].iterrows():
         date_str = str(row['date'])[:10]
         date_short = date_str[5:]
         close_str = f"**{_fmt_num(row['close'])}**"
         pct = row.get('pct_chg', 0) or 0
         pct_str = _fmt_pct(pct)
-        if abs(pct) >= 5:
+        if abs(pct) >= pct_highlight:
             pct_str = f"**{_fmt_pct(pct)}**"
         lines.append(
             f"| {date_short} | {_fmt_num(row['open'])} | {_fmt_num(row['high'])} | "

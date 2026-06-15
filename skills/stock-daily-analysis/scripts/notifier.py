@@ -64,12 +64,12 @@ def format_analysis_report(report: AnalysisReport) -> str:
     if 'current_price' in tech:
         lines.append(f"  当前价格: {tech.get('current_price', 'N/A')}")
     
-    if 'ma5' in tech:
-        lines.append(f"  MA5: {tech.get('ma5', 'N/A'):.2f} (乖离率: {tech.get('bias_ma5', 0):+.2f}%)")
-    if 'ma10' in tech:
-        lines.append(f"  MA10: {tech.get('ma10', 'N/A'):.2f} (乖离率: {tech.get('bias_ma10', 0):+.2f}%)")
-    if 'ma20' in tech:
-        lines.append(f"  MA20: {tech.get('ma20', 'N/A'):.2f}")
+    if 'ma5' in tech and isinstance(tech['ma5'], (int, float)):
+        lines.append(f"  MA5: {tech['ma5']:.2f} (乖离率: {tech.get('bias_ma5', 0):+.2f}%)")
+    if 'ma10' in tech and isinstance(tech['ma10'], (int, float)):
+        lines.append(f"  MA10: {tech['ma10']:.2f} (乖离率: {tech.get('bias_ma10', 0):+.2f}%)")
+    if 'ma20' in tech and isinstance(tech['ma20'], (int, float)):
+        lines.append(f"  MA20: {tech['ma20']:.2f}")
     
     if 'trend_status' in tech:
         lines.append(f"  趋势状态: {tech.get('trend_status', 'N/A')}")

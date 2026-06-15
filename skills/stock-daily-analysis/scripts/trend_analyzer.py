@@ -190,6 +190,33 @@ class TrendAnalysisResult:
         }
 
 
+def _get_board(code):
+    """根据股票代码返回板块: bse(北交所) / gem(创业板) / star(科创板) / main(主板)"""
+    if not code:
+        return "main"
+    prefix = code[:2]
+    if prefix in ("83", "87", "88", "92"):
+        return "bse"
+    elif prefix == "30":
+        return "gem"
+    elif prefix == "68":
+        return "star"
+    else:
+        return "main"
+
+
+def _get_limit_pct(code, name=""):
+    """根据板块和ST标识返回涨跌停板幅度(%)"""
+    board = _get_board(code)
+    is_st = "ST" in (name or "")
+    if board == "bse":
+        return 30
+    elif board in ("gem", "star"):
+        return 20
+    else:
+        return 5 if is_st else 10
+
+
 class StockTrendAnalyzer:
     """
     股票趋势分析器
@@ -216,18 +243,24 @@ class StockTrendAnalyzer:
     RSI_OVERBOUGHT = 70
     RSI_OVERSOLD = 30
     
-    def analyze(self, df: pd.DataFrame, code: str) -> TrendAnalysisResult:
+    def analyze(self, df: pd.DataFrame, code: str, name: str = "") -> TrendAnalysisResult:
         """
         分析股票趋势
-        
+
         Args:
             df: 包含 OHLCV 数据的 DataFrame
             code: 股票代码
-            
+            name: 股票名称（用于识别ST股）
+
         Returns:
             TrendAnalysisResult 分析结果
         """
         result = TrendAnalysisResult(code=code)
+
+        # 根据板块动态计算阈值
+        self._limit_pct = _get_limit_pct(code, name)
+        self._bias_threshold = self._limit_pct * 0.5
+        self._spread_threshold = self._limit_pct * 0.5
         
         if df is None or df.empty or len(df) < 20:
             logger.warning(f"{code} 数据不足，无法进行趋势分析")
@@ -317,7 +350,7 @@ class StockTrendAnalyzer:
                 prev_spread = (prev['MA5'] - prev['MA20']) / prev['MA20'] * 100 if prev['MA20'] > 0 else 0
                 curr_spread = (ma5 - ma20) / ma20 * 100 if ma20 > 0 else 0
                 
-                if curr_spread > prev_spread and curr_spread > 5:
+                if curr_spread > prev_spread and curr_spread > self._spread_threshold:
                     result.trend_status = TrendStatus.STRONG_BULL
                     result.ma_alignment = "强势多头排列，均线发散上行"
                     result.trend_strength = 90
@@ -341,7 +374,7 @@ class StockTrendAnalyzer:
                 prev_spread = (prev['MA20'] - prev['MA5']) / prev['MA5'] * 100 if prev['MA5'] > 0 else 0
                 curr_spread = (ma20 - ma5) / ma5 * 100 if ma5 > 0 else 0
                 
-                if curr_spread > prev_spread and curr_spread > 5:
+                if curr_spread > prev_spread and curr_spread > self._spread_threshold:
                     result.trend_status = TrendStatus.STRONG_BEAR
                     result.ma_alignment = "强势空头排列，均线发散下行"
                     result.trend_strength = 10
@@ -543,24 +576,24 @@ class StockTrendAnalyzer:
         # 乖离率评分（20分）
         bias = result.bias_ma5
         if bias < 0:
-            if bias > -3:
+            if bias > -self._limit_pct * 0.3:
                 score += 20
                 reasons.append(f"✅ 价格略低于MA5({bias:.1f}%)，回踩买点")
-            elif bias > -5:
+            elif bias > -self._limit_pct * 0.5:
                 score += 16
                 reasons.append(f"✅ 价格回踩MA5({bias:.1f}%)，观察支撑")
             else:
                 score += 8
                 risks.append(f"⚠️ 乖离率过大({bias:.1f}%)，可能破位")
-        elif bias < 2:
+        elif bias < self._limit_pct * 0.2:
             score += 18
             reasons.append(f"✅ 价格贴近MA5({bias:.1f}%)，介入好时机")
-        elif bias < self.BIAS_THRESHOLD:
+        elif bias < self._bias_threshold:
             score += 14
             reasons.append(f"⚡ 价格略高于MA5({bias:.1f}%)，可小仓介入")
         else:
             score += 4
-            risks.append(f"❌ 乖离率过高({bias:.1f}%>5%)，严禁追高！")
+            risks.append(f"❌ 乖离率过高({bias:.1f}%>{self._bias_threshold:.0f}%)，严禁追高！")
         
         # 量能评分（15分）
         volume_scores = {
@@ -678,7 +711,7 @@ class StockTrendAnalyzer:
             result.price_phase = "下跌趋势"
         elif (result.ma_convergence < 0.02
               and result.consecutive_up_days <= 3
-              and result.recent_10d_gain_pct < 5):
+              and result.recent_10d_gain_pct < self._limit_pct * 0.5):
             result.price_phase = "蓄势"
         elif result.prev_ma_convergence < 0.02 and result.ma_convergence >= 0.02:
             result.price_phase = "发散启动"
@@ -692,7 +725,7 @@ class StockTrendAnalyzer:
                 close_end = df['close'].iloc[-1]
                 volatility = (high_5d - low_5d) / low_5d * 100 if low_5d > 0 else 0
                 close_change = abs(close_end - close_start) / close_start * 100 if close_start > 0 else 0
-                if volatility > 5 and close_change < 2:
+                if volatility > self._limit_pct * 0.5 and close_change < self._limit_pct * 0.2:
                     result.price_phase = "高位震荡"
                 else:
                     result.price_phase = "盘整"
@@ -755,7 +788,7 @@ class StockTrendAnalyzer:
                 result.ma_support_success_rate = support_success / support_events
 
 
-def analyze_stock(df: pd.DataFrame, code: str) -> TrendAnalysisResult:
+def analyze_stock(df: pd.DataFrame, code: str, name: str = "") -> TrendAnalysisResult:
     """便捷函数：分析单只股票"""
     analyzer = StockTrendAnalyzer()
-    return analyzer.analyze(df, code)
+    return analyzer.analyze(df, code, name)
