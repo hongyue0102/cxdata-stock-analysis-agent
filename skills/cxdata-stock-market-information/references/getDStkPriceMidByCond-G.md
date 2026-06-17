@@ -8,7 +8,7 @@
 |--------|------------|----------|----------|----------|
 | stkCode | 股票代码 | 字符类型 | 否 |  |
 | stkShortName | 股票简称 | 字符类型 | 否 |  |
-| endDate | 交易日期 | 日期类型 | 否 |  |
+| endDate | 交易日期 | 日期类型(yyyy-MM-dd) | 否 |  |
 | pageNum | 页码 | Integer | 是 | 1 |
 | pageSize | 每页条数 | Integer | 是 | 20 |
 

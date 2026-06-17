@@ -1,110 +1,83 @@
 # -*- coding: utf-8 -*-
 """
-数据获取模块 - 直接通过 HTTP 请求获取 A 股日行情数据
+数据获取模块 - 通过 query.py 统一 CLI 调用获取 A 股日行情数据
+
+鉴权说明：
+    认证状态由 query.py/auth.py 自动管理（读取 ~/.cxda-cache/.shared/cxda_auth.json，跨 agent 共享）。
+    若未认证，需先由 Agent 引导用户完成 auth.py 鉴权流程。
 """
 
-import base64
-import gzip
 import json
 import logging
-import os
 import re
-from datetime import datetime, timedelta
+import subprocess
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Tuple
 
 import pandas as pd
-import requests
 
 logger = logging.getLogger(__name__)
 
-# .env 路径（密钥配置文件）
-_ENV_PATH = Path(__file__).parent.parent.parent / 'stock-market-information' / 'scripts' / '.env'
-
-_TOKEN_VALID_SECONDS = 60
-_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_QUERY_SCRIPT = _SCRIPT_DIR / "query.py"
 
 
-def _load_env() -> Dict[str, str]:
-    env = {}
-    if _ENV_PATH.exists():
-        for line in _ENV_PATH.read_text(encoding='utf-8').splitlines():
-            if '=' in line and not line.strip().startswith('#'):
-                k, v = line.split('=', 1)
-                env[k.strip()] = v.strip()
-    return env
-
-
-def _save_env(env: Dict[str, str]):
-    lines = []
-    if _ENV_PATH.exists():
-        for line in _ENV_PATH.read_text(encoding='utf-8').splitlines():
-            if not any(line.strip().startswith(k) for k in ['AUTH_TOKEN', '# === Token']):
-                lines.append(line)
-    lines.extend([
-        '',
-        '# === Token缓存（自动管理，请勿手动修改）===',
-        f'AUTH_TOKEN={env.get("AUTH_TOKEN", "")}',
-        f'AUTH_TOKEN_EXPIRE={env.get("AUTH_TOKEN_EXPIRE", "")}',
-    ])
-    _ENV_PATH.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-
-
-def _get_token(base_url: str, user_key: str) -> Optional[str]:
-    """获取有效 token（优先缓存，过期自动刷新）"""
-    env = _load_env()
-    cached_token = env.get('AUTH_TOKEN')
+def _run_query(code: str, page: int, page_size: int = 20) -> Optional[Dict]:
+    """通过 subprocess 调用 query.py api，返回解析后的 dict。"""
+    cmd = [
+        sys.executable,
+        str(_QUERY_SCRIPT),
+        "api",
+        "getStkDayQuoByCond-G",
+        f"stkCode={code}",
+        f"pageNum={page}",
+        f"pageSize={page_size}",
+    ]
     try:
-        expire = datetime.strptime(env.get('AUTH_TOKEN_EXPIRE', ''), '%Y-%m-%d %H:%M:%S')
-        if cached_token and expire > datetime.now():
-            return cached_token
-    except (ValueError, TypeError):
-        pass
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(_SCRIPT_DIR),
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("query.py 调用超时")
+        return None
 
-    # 刷新 token
-    resp = requests.get(
-        f"{base_url}/webservice/foreign_getAuthtoken.htm",
-        params={"userKey": user_key},
-        headers=_HEADERS,
-    )
-    token = json.loads(resp.text).get("result")
-    if token:
-        env.update({
-            'AUTH_TOKEN': token,
-            'AUTH_TOKEN_EXPIRE': (datetime.now() + timedelta(seconds=_TOKEN_VALID_SECONDS)).strftime('%Y-%m-%d %H:%M:%S'),
-        })
-        _save_env(env)
-    return token
+    if result.returncode != 0:
+        logger.error(f"query.py 退出码 {result.returncode}, stderr: {result.stderr[:200]}")
+        return None
+
+    stdout = result.stdout.strip()
+    if not stdout:
+        logger.error("query.py 无输出")
+        return None
+
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError as e:
+        logger.error(f"query.py 响应解析失败: {e}")
+        return None
+
+    # 处理特殊状态
+    status = data.get("status")
+    if status == "confirmation_required":
+        logger.warning("触发 50 次硬限制，需先执行 query.py session confirm")
+        return None
+    if status in ("failed", "terms_not_accepted"):
+        logger.error(f"鉴权失败: {data.get('error', '未知错误')}")
+        return None
+
+    return data
 
 
 def _fetch_daily_quote(code: str, page: int, page_size: int = 20) -> Optional[Dict]:
     """获取日行情数据（只调用 getStkDayQuoByCond-G）"""
-    config = _load_env()
-    base_url = os.environ.get('BASE_URL', '').rstrip('/') or config.get('BASE_URL', '').rstrip('/')
-    user_key = os.environ.get('CXDA_USER_KEY') or config.get('CXDA_USER_KEY')
-
-    if not base_url or not user_key:
-        logger.error("未在 .env 或环境变量中找到 BASE_URL 或 CXDA_USER_KEY")
+    data = _run_query(code, page, page_size)
+    if data is None:
         return None
-
-    token = _get_token(base_url, user_key)
-    if not token:
-        logger.error("获取 authToken 失败")
-        return None
-
-    params = {
-        "authtoken": token,
-        "stkCode": code,
-        "pageNum": str(page),
-        "pageSize": str(page_size),
-    }
-
-    resp = requests.get(
-        f"{base_url}/webservice/cxdata/getStkDayQuoByCond-G.htm",
-        params=params,
-        headers=_HEADERS,
-    )
-    data = json.loads(gzip.decompress(base64.b64decode(resp.text.strip())).decode('utf-8'))
 
     if data.get('code') == '10000':
         return data

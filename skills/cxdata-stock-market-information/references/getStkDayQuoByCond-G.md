@@ -8,9 +8,9 @@
 |--------|------------|----------|----------|----------|
 | stkCode | 股票代码 | 字符类型 | 否 |  |
 | stkShortName | 股票简称 | 字符类型 | 否 |  |
-| tradeDate | 交易日期 | 日期类型 | 否 |  |
+| tradeDate | 交易日期 | 日期类型(yyyy-MM-dd) | 否 |  |
 | pageNum | 页码 | Integer | 是 | 1 |
-| pageSize | 每页条数 | Integer | 是 | 10000 |
+| pageSize | 每页条数 | Integer | 是 | 20 |
 
 #### 输出参数
 
@@ -27,5 +27,6 @@
 | CLOSE_PRICE | 收盘价 | 数值类型 |
 | TRADE_VOL | 成交数量 | 数值类型 |
 | PRICE_LIMIT | 价格涨跌幅 | 数值类型 |
+| PRICE_UPDOWN_TYPE_PAR | 涨跌幅状态参数 | 数值类型 |
 
 

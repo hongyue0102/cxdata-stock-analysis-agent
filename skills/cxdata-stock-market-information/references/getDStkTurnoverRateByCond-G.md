@@ -8,7 +8,7 @@
 |--------|------------|----------|----------|----------|
 | stkCode | 股票代码 | 字符类型 | 否 |  |
 | stkShortName | 股票简称 | 字符类型 | 否 |  |
-| endDate | 截止日期 | 日期类型 | 否 |  |
+| endDate | 截止日期 | 日期类型(yyyy-MM-dd) | 否 |  |
 | pageNum | 页码 | Integer | 是 | 1 |
 | pageSize | 每页条数 | Integer | 是 | 20 |
 
@@ -30,11 +30,5 @@
 | TURNOVER_RATE_TY | 今年以来平均换手率 | 数值类型 |
 | TURNOVER_RATE_FL | 上市至今平均换手率 | 数值类型 |
 | TRADE_DAY | 上市以来的交易天数 | 数值类型 |
-| TOT_VALUE_RATE | 公司总市值(考虑汇率,A股/B股) | 数值类型 |
-| FLOAT_VALUE_RATE | 公司流通市值(考虑汇率，A股/B股) | 数值类型 |
-| FLOAT_VALUE_S_RATE | 个股流通市值(考虑汇率) | 数值类型 |
-| TOT_VALUE_S_RATE | 个股总市值(考虑汇率) | 数值类型 |
-| FLOAT_VALUE_S | 个股流通市值(不考虑汇率) | 数值类型 |
-| TOT_VALUE_S | 个股总市值(不考虑汇率) | 数值类型 |
 
 

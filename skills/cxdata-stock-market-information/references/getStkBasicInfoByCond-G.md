@@ -10,12 +10,12 @@
 | stkShortName | 股票简称 | 字符类型 | 否 |  |
 | stkTypePar | 股票类型 | 数值类型 | 否 |  |
 | stkUniCode1 | 同公司A/B股统一编码 | 数值类型 | 否 |  |
-| listDate | 上市日期 | 日期类型 | 否 |  |
+| listDate | 上市日期 | 日期类型(yyyy-MM-dd) | 否 |  |
 | secMarPar | 证券市场 | 数值类型 | 否 |  |
 | listSectPar | 上市板块 | 数值类型 | 否 |  |
 | listStaPar | 上市状态 | 数值类型 | 否 |  |
-| chanDate | 变更日期 | 日期类型 | 否 |  |
-| delistDate | 退市日期 | 日期类型 | 否 |  |
+| chanDate | 变更日期 | 日期类型(yyyy-MM-dd) | 否 |  |
+| delistDate | 退市日期 | 日期类型(yyyy-MM-dd) | 否 |  |
 | pageNum | 页码 | Integer | 是 | 1 |
 | pageSize | 每页条数 | Integer | 是 | 20 |
 
