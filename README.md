@@ -21,41 +21,58 @@ Agent 会自动：获取数据 → 计算指标 → AI 解读 → 生成报告
 
 ## 前置依赖
 
-1. 安装 Python 依赖：`pip install pandas numpy requests python-dotenv`
-2. 首次运行时自动引导配置密钥：
-   - 前往 [财新数据平台](https://yun.ccxe.com.cn/data/Skills) 注册并申请 `CXDA_USER_KEY`（**平台目前处于推广期，可免费试用**）
-   - 首次执行分析时会提示输入密钥，自动保存，以后无需再配
+1. 安装 Python 依赖：`pip install pandas numpy requests`
+2. 首次使用需完成鉴权（**新版 SMS 验证码登录机制**）：
+   - 调用 `skills/stock-daily-analysis/scripts/auth.py status` 检查认证状态
+   - 未认证时按 AGENT.md 引导用户完成协议确认 + 手机号验证码登录
+   - 认证信息持久化在 `~/.cxda-cache/.shared/cxda_auth.json`，**跨所有 cxdata Agent 共享**，无需重复认证
    - 数据源 Skill 已内置在 Agent 中，无需额外下载
 
 ## 目录结构
 
 ```
 cxdata-stock-analysis-agent/
-├── AGENT.md              # Agent 整体人设与执行逻辑
-├── SOUL.md               # 身份、性格、能力边界
-├── rules.md              # 硬性规则
-├── config.json           # 元数据配置
+├── AGENT.md                          # Agent 整体人设与执行逻辑
+├── SOUL.md                           # 身份、性格、能力边界
+├── rules.md                          # 硬性规则
+├── config.json                       # 元数据配置
 ├── skills/
-│   ├── stock-market-information/  # 内置数据源 Skill（财新数据平台 API）
-│   │   ├── SKILL.md
-│   │   ├── references/            # API 接口文档
-│   │   └── scripts/
-│   │       ├── api_query.py       # 统一 API 调用工具
-│   │       └── .env               # 数据源配置（CXDA_USER_KEY / BASE_URL）
-│   └── stock-daily-analysis/     # 技术分析 Skill
-│       ├── SKILL.md              # Skill 定义（含 frontmatter）
+│   ├── cxdata-stock-market-information/  # 内置数据源（空壳：SKILL.md + references）
+│   └── stock-daily-analysis/             # 技术分析 Skill
+│       ├── SKILL.md                      # Skill 定义（含 frontmatter）
 │       ├── requirements.txt
 │       └── scripts/
-│           ├── analyzer.py       # 主入口
-│           ├── data_fetcher.py   # 数据获取（调用内置 stock-market-information）
-│           ├── trend_analyzer.py # 技术分析引擎
-│           ├── ai_analyzer.py    # 结果整理
-│           ├── notifier.py       # 报告输出
-│           ├── .env.example      # 分析参数配置模板
+│           ├── analyzer.py               # 主入口
+│           ├── data_fetcher.py           # 数据获取（subprocess 调 query.py）
+│           ├── trend_analyzer.py         # 技术分析引擎
+│           ├── ai_analyzer.py            # 结果整理
+│           ├── notifier.py               # 报告输出
+│           ├── auth.py / common.py /     # cxdata 官方鉴权四件套（拷自新版 skill）
+│           ├── cxda_cache_cli.py / query.py
 │           └── prompts/
 │               └── analysis_prompt.md
 └── README.md
 ```
+
+## 变更历史
+
+### 2026-06-17 鉴权升级为 cxdata 官方 SMS+协议确认机制（commit 1c38442）
+
+- **data_fetcher.py** 改为 subprocess 调用官方 `query.py`（内置 token 管理、gzip 解码、积分计数、50 次硬限制），不再自行实现 HTTP 鉴权
+- 新增 `auth.py / common.py / cxda_cache_cli.py / query.py`（拷自新版 cxdata-stock-market-information skill）
+- **AGENT.md** 加 Step 1.5 鉴权前置（terms-check + status + SMS 引导）+ Step 5 session summary
+- 数据源 skill 目录改名为 `cxdata-stock-market-information`（SKILL.md/references 同步新版，scripts 空壳避免恢复通用 `api_query.py`）
+- 删除老版 `.env.example`（鉴权改为 `~/.cxda-cache/` 共享缓存）
+
+### 2026-06-12 移除通用 api_query.py（commit 9ed84ff）
+
+- **问题**：通过 OpenClaw 执行 agent 时，LLM 看到 `stock-market-information/scripts/api_query.py` 通用脚本，自主调用了 9 个基本面接口，生成超范围的大报告
+- **方案**：`data_fetcher.py` 内嵌 token + HTTP 请求，硬编码只调 `getStkDayQuoByCond-G`，删除通用 `api_query.py`
+
+### 2026-06-11 约束 LLM 不得篡改技术指标（commit 8bc2df8）
+
+- **问题**：同一股票两次运行生成的报告数值/结构不同，LLM 自行编造或篡改技术指标
+- **方案**：AGENT.md 新增 Step 2 命令B（generate_report 生成数值固定的报告骨架），Step 3/4 加禁止事项
 
 ## 免责声明
 
