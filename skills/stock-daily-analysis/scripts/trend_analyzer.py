@@ -266,7 +266,23 @@ class StockTrendAnalyzer:
             logger.warning(f"{code} 数据不足，无法进行趋势分析")
             result.risk_factors.append("数据不足，无法完成分析")
             return result
-        
+
+        # 技术指标计算改用前复权 OHLC（消除除权除息导致的价格跳空）
+        # close_raw 保留原始价，用于 current_price 展示真实成交价
+        if 'close_fq' in df.columns:
+            df = df.copy()
+            df['close_raw'] = df['close']
+            df['open_raw'] = df['open']
+            df['high_raw'] = df['high']
+            df['low_raw'] = df['low']
+            df['close'] = df['close_fq']
+            df['open'] = df['open_fq']
+            df['high'] = df['high_fq']
+            df['low'] = df['low_fq']
+            logger.info(f"{code} 技术指标计算使用前复权价格")
+        else:
+            logger.warning(f"{code} 无前复权字段，技术指标退化为不复权价格")
+
         # 确保数据按日期排序
         df = df.sort_values('date').reset_index(drop=True)
         
@@ -277,7 +293,8 @@ class StockTrendAnalyzer:
         
         # 获取最新数据
         latest = df.iloc[-1]
-        result.current_price = float(latest['close'])
+        # current_price 用原始真实成交价（前复权价仅用于指标计算）
+        result.current_price = float(latest['close_raw'] if 'close_raw' in df.columns else latest['close'])
         result.ma5 = float(latest['MA5'])
         result.ma10 = float(latest['MA10'])
         result.ma20 = float(latest['MA20'])
