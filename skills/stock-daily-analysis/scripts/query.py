@@ -293,6 +293,15 @@ def cmd_api(api_id, params):
     认证方式：authtoken（自动从缓存获取或刷新）
     响应格式：gzip + base64 编码
     """
+    # 安全校验：api_id 直接拼接到 URL path，必须严格限制为合法接口名格式
+    # 防止 path traversal 攻击（如 api_id="../../admin/users" 访问内部端点）
+    import re
+    if not isinstance(api_id, str) or not re.match(r"^[A-Za-z0-9_-]+$", api_id):
+        output_error(
+            "非法的 api_id：{!r}（只允许字母、数字、下划线、短横线）".format(api_id)
+        )
+        return
+
     accepted, error_response = check_terms_accepted()
     if not accepted:
         output_json(error_response)
@@ -433,6 +442,14 @@ def cmd_page_size(api_id):
 
     认证方式：userKey
     """
+    # 安全校验：与 cmd_api 保持一致的 api_id 白名单
+    import re
+    if not isinstance(api_id, str) or not re.match(r"^[A-Za-z0-9_-]+$", api_id):
+        output_error(
+            "非法的 api_id：{!r}（只允许字母、数字、下划线、短横线）".format(api_id)
+        )
+        return
+
     accepted, error_response = check_terms_accepted()
     if not accepted:
         output_json(error_response)
