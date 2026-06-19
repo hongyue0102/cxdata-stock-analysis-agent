@@ -62,13 +62,73 @@ class AIAnalyzer:
             'observation_points': self._gen_observation_points(tech, buy_signal),
         }
 
-    def _calc_key_levels(self, tech: Dict[str, Any]) -> Dict[str, float]:
-        """4 个关键价位：强支撑 / 短支撑 / 第一压力 / 强压力"""
+    def _calc_key_levels(self, tech: Dict[str, Any]) -> Dict[str, Any]:
+        """4 个关键价位 + 依据说明：强支撑 / 短支撑 / 第一压力 / 强压力
+
+        角色按价格 vs 均线动态判定（不再无脑把 MA20 当支撑）：
+        - 价格【下方】的均线 → 支撑（离价最近=短支撑，最远=强支撑）
+        - 价格【上方】的均线 → 压力（离价最近=第一压力，最远=强压力）
+        这样多头排列时 MA20 自然成为强支撑，空头排列时 MA20 成为强压力，
+        与实际价位的支撑/压力含义一致。
+
+        返回：
+          strong_support / short_support / first_resistance / strong_resistance: 价位(float)
+          level_notes: dict，每个 key 对应的依据文字（供骨架展示）
+        """
+        current = _safe_float(tech.get('current_price'))
+        ma5 = _safe_float(tech.get('ma5'))
+        ma10 = _safe_float(tech.get('ma10'))
+        ma20 = _safe_float(tech.get('ma20'))
+        recent_5d_high = _safe_float(tech.get('recent_5d_high'))
+        prev_high = _safe_float(tech.get('prev_high'))
+        prev_high_date = tech.get('prev_high_date', '')
+
+        # 三条均线按相对价格分到支撑/压力池（忽略与价格几乎重合的线，阈值 0.1%）
+        eps = abs(current) * 0.001 if current else 0.01
+        supports = []   # [(价位, 名称)] 价格下方的线
+        resistances = []  # [(价位, 名称)] 价格上方的线
+        for price, name in ((ma20, 'MA20'), (ma10, 'MA10'), (ma5, 'MA5')):
+            if price <= 0:
+                continue
+            if price < current - eps:
+                supports.append((price, name))
+            elif price > current + eps:
+                resistances.append((price, name))
+            # 与价格几乎重合的线不计入，避免噪声
+
+        # 支撑：离价最近=短支撑，最远=强支撑
+        supports.sort(key=lambda x: x[0], reverse=True)  # 价高者离价近
+        short_support_p, short_support_n = (supports[0] if supports else (0.0, ''))
+        strong_support_p, strong_support_n = (supports[-1] if supports else (0.0, ''))
+
+        # 均线压力：离价最近=第一压力，最远=强压力
+        resistances.sort(key=lambda x: x[0])  # 价低者离价近
+        ma_resist_first_p, ma_resist_first_n = (resistances[0] if resistances else (0.0, ''))
+        ma_resist_strong_p, ma_resist_strong_n = (resistances[-1] if resistances else (0.0, ''))
+
+        # 第一压力：取「均线近端压力」与「近 5 日高点」中较低者（先碰到的）
+        first_candidates = [(p, n) for p, n in [(ma_resist_first_p, ma_resist_first_n), (recent_5d_high, '近 5 日最高')] if p > 0]
+        first_candidates.sort(key=lambda x: x[0])
+        first_resistance_p, first_resistance_n = (first_candidates[0] if first_candidates else (0.0, ''))
+
+        # 强压力：取「均线远端压力」与「前高」中较高者（最难突破的）
+        strong_candidates = [(p, n) for p, n in [(ma_resist_strong_p, ma_resist_strong_n), (prev_high, '前高（套牢盘）')] if p > 0]
+        strong_candidates.sort(key=lambda x: x[0], reverse=True)
+        strong_resistance_p, strong_resistance_n = (strong_candidates[0] if strong_candidates else (0.0, ''))
+
+        # 注意：支撑位可能缺失（如价格跌破所有均线时，下方无均线支撑），
+        # 此时显示为空，不硬凑反向价位——那会把压力误标成支撑。
         return {
-            'strong_support': round(_safe_float(tech.get('ma20')), 2),
-            'short_support': round(_safe_float(tech.get('ma5')), 2),
-            'first_resistance': round(_safe_float(tech.get('recent_5d_high')), 2),
-            'strong_resistance': round(_safe_float(tech.get('prev_high')), 2),
+            'strong_support': round(strong_support_p, 2) if strong_support_p else None,
+            'short_support': round(short_support_p, 2) if short_support_p else None,
+            'first_resistance': round(first_resistance_p, 2) if first_resistance_p else None,
+            'strong_resistance': round(strong_resistance_p, 2) if strong_resistance_p else None,
+            'level_notes': {
+                'strong_support': f'{strong_support_n} 支撑' if strong_support_n else '下方无均线支撑',
+                'short_support': f'{short_support_n} 支撑' if short_support_n else '下方无均线支撑',
+                'first_resistance': first_resistance_n if first_resistance_n else '上方无明显压力',
+                'strong_resistance': strong_resistance_n if strong_resistance_n else '上方无明显压力',
+            },
         }
 
     def _calc_reasonable_range(self, tech: Dict[str, Any], buy_signal: str) -> Tuple[float, float]:

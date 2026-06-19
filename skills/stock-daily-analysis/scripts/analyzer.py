@@ -309,14 +309,15 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
 
     # 支撑压力位（使用 ai_analysis.key_levels，确保与 LLM 引用一致）
     key_levels = ai_result.get('key_levels', {})
+    level_notes = key_levels.get('level_notes', {})
     lines.append("## 支撑与压力位")
     lines.append("")
     lines.append("| 类型 | 价位 | 依据 |")
     lines.append("|------|------|------|")
-    lines.append(f"| 强支撑 | {_fmt_num(key_levels.get('strong_support'))} | MA20 多头最后防线 |")
-    lines.append(f"| 短支撑 | {_fmt_num(key_levels.get('short_support'))} | MA5 短线防守线 |")
-    lines.append(f"| 第一压力 | {_fmt_num(key_levels.get('first_resistance'))} | 近 5 日最高 |")
-    lines.append(f"| 强压力 | {_fmt_num(key_levels.get('strong_resistance'))} | 前高（套牢盘）|")
+    lines.append(f"| 强支撑 | {_fmt_num(key_levels.get('strong_support'))} | {level_notes.get('strong_support', '')} |")
+    lines.append(f"| 短支撑 | {_fmt_num(key_levels.get('short_support'))} | {level_notes.get('short_support', '')} |")
+    lines.append(f"| 第一压力 | {_fmt_num(key_levels.get('first_resistance'))} | {level_notes.get('first_resistance', '')} |")
+    lines.append(f"| 强压力 | {_fmt_num(key_levels.get('strong_resistance'))} | {level_notes.get('strong_resistance', '')} |")
     reasonable = ai_result.get('reasonable_range', ())
     if reasonable and len(reasonable) == 2:
         lines.append("")
