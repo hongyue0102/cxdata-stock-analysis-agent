@@ -287,7 +287,7 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     lines.append("|------|------|")
     lines.append(f"| RSI(6) | {_fmt_num(tech.get('rsi_6', 0))} |")
     lines.append(f"| RSI(12) | {_fmt_num(tech.get('rsi_12', 0))} |")
-    lines.append(f"| RSI(24) | {_fmt_num(tech.get('rsi_24', 0))} |")
+    lines.append(f"| RSI(20) | {_fmt_num(tech.get('rsi_20', 0))} |")
     lines.append("")
     lines.append(f"- **RSI状态**: {tech.get('rsi_status', 'N/A')} (RSI12 = {_fmt_num(tech.get('rsi_12', 0))})")
     lines.append(f"- **信号**: {tech.get('rsi_signal', 'N/A')}")

@@ -112,7 +112,7 @@ class TrendAnalysisResult:
     # RSI 指标
     rsi_6: float = 0.0
     rsi_12: float = 0.0
-    rsi_24: float = 0.0
+    rsi_20: float = 0.0
     rsi_status: RSIStatus = RSIStatus.NEUTRAL
     rsi_signal: str = ""
     
@@ -169,7 +169,7 @@ class TrendAnalysisResult:
             'macd_signal': self.macd_signal,
             'rsi_6': self.rsi_6,
             'rsi_12': self.rsi_12,
-            'rsi_24': self.rsi_24,
+            'rsi_20': self.rsi_20,
             'rsi_status': self.rsi_status.value,
             'rsi_signal': self.rsi_signal,
             # 量化增强指标
@@ -546,7 +546,7 @@ class StockTrendAnalyzer:
         
         result.rsi_6 = float(latest[f'RSI_{self.RSI_SHORT}'])
         result.rsi_12 = float(latest[f'RSI_{self.RSI_MID}'])
-        result.rsi_24 = float(latest[f'RSI_{self.RSI_LONG}'])
+        result.rsi_20 = float(latest[f'RSI_{self.RSI_LONG}'])
         
         rsi_mid = result.rsi_12
         
