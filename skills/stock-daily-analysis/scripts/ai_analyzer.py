@@ -143,7 +143,7 @@ class AIAnalyzer:
             points.append(f'已突破前高 {prev_high:.2f}（{prev_high_date}），上方无近端压力')
 
         # MA 支撑
-        if support_count >= 3 and support_rate < 0.5:
+        if support_count >= 3 and support_rate <= 0.5:
             points.append(f'MA 支撑成功率仅 {support_rate:.0%}（{int(support_count)} 次测试），支撑偏弱')
 
         # MACD 反转
