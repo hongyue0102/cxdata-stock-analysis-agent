@@ -46,19 +46,49 @@ cd {Agent目录}/skills/stock-daily-analysis && python3 -c "from scripts.analyze
 
 ## Step 2: 你（Agent LLM）必须亲自解读技术指标
 
-**重要：这一步是你（Agent LLM）必须执行的分析工作，不要跳过，不要直接使用 ai_analysis 字段的内容。**
+**重要：这一步是你（Agent LLM）必须执行的分析工作，不得跳过。**
 
-Step 1 返回的 JSON 中，`ai_analysis` 字段只是技术指标的简单字符串拼接，不包含任何智能判断。你必须基于 `technical_indicators` 中的数据，自己进行分析和解读。
+### ⚠️ 内容来源严格分工（决定两次报告是否一致）
+
+Step 1 返回的 JSON 中，`ai_analysis` 字段已重构，分为「Python 固定的结构化判断」和「LLM 必须独立完成的解读」。**严格按以下分工执行：**
+
+#### 【Python 固定，LLM 必须原样引用，不得修改/编造/遗漏】
+
+| 字段 | 内容 | LLM 怎么用 |
+|---|---|---|
+| `technical_indicators.*` | 所有原始数值（MA/RSI/MACD/价位等）| 直接引用，不得编造 |
+| `ai_analysis.sentiment_score` | 综合评分 | 直接引用 |
+| `ai_analysis.signal_labels` | 信号标签列表（如"多头排列"、"RSI强势"）| 作为解读依据，可改写为通顺文字 |
+| `ai_analysis.key_levels` | 4 个关键价位（强支撑/短支撑/第一压力/强压力）| **报告支撑压力表必须用这 4 个价位** |
+| `ai_analysis.reasonable_range` | 合理价值区间 (lower, upper) | **AI 结论的合理区间必须用这个**，不得自创 |
+| `ai_analysis.risk_points` | 风险点列表（Python 按阈值触发）| **报告"风险提示"段必须逐条列出全部，不得遗漏，不得添加未触发的** |
+| `ai_analysis.observation_points` | 关键观察点（Python 给）| 报告"关键观察点"必须涵盖全部 |
+
+#### 【LLM 必须独立完成的部分】
+
+1. **每个指标的"含义解读"**：用通顺文字说明数据含义（如"多头排列意味着趋势结构健康，多头力量主导"）
+2. **数据串联**：把 Python 给的数据/价位/区间写成连贯段落，措辞可自由
+3. **综合 AI 结论**：基于 signal_labels + risk_points 综合判断"看多/谨慎看多/观望/看空"，给出一段总结
+4. **看多理由改写**：signal_labels 是标签，LLM 必须把每条标签扩展为完整句子（如把"多头排列"扩成"MA5>MA10>MA20，多头排列，趋势结构健康"）
+
+#### 【LLM 严禁做的事】
+
+- ❌ 编造 `technical_indicators` 里没有的数值
+- ❌ 自创合理区间（必须用 `reasonable_range`）
+- ❌ 自创关键价位（必须用 `key_levels`）
+- ❌ 添加 `risk_points` 里没有的风险点（如 Python 没触发"量价背离"，LLM 不得自己说）
+- ❌ 漏掉 `risk_points` 里的任何一条
+- ❌ 直接复用已删除的字段（`analysis_summary` / `buy_reason` / `risk_warning` 不再返回）
 
 ### 你需要完成的分析：
 
-1. **AI结论**：看多 / 继续跟踪 / 观望 / 看空（结合所有指标综合判断，不是直接取 operation_advice）
-2. **目标价**：基于支撑压力位、均线位置、近期高点推算
-3. **止损价**：基于关键支撑位（MA20、近期低点）设定
-4. **关键观察点**：接下来 1-3 个交易日需要关注什么
-5. **每个技术指标下写 AI 解读**：不要只列数据，要说明含义和后续走势预判
-6. **看多理由**：基于 signal_reasons 结合近 20 日行情走势做综合分析
-7. **风险提示**：基于 risk_factors 结合近 20 日行情走势做综合分析
+1. **AI结论**：看多 / 谨慎看多 / 观望 / 看空（基于 signal_labels 和 risk_points 综合判断，**不是直接抄 operation_advice**）
+2. **合理价值区间**：直接引用 `reasonable_range`，必要时解释为什么是这个区间
+3. **风险警示区间**：基于 `key_levels.strong_resistance`（强压力位上方）和 `key_levels.strong_support`（强支撑位下方）
+4. **关键观察点**：涵盖 `observation_points` 全部条目，措辞可调
+5. **每个技术指标下写 AI 解读**：每条含「数据值 + 含义 + 推论」三段（不得只列数据）
+6. **看多理由**：把 signal_labels 每条扩展为完整句子，结合近 20 日走势
+7. **风险提示**：把 risk_points 全部列出（一条不漏），可补充上下文说明
 
 ### 你需要重点关注的字段：
 

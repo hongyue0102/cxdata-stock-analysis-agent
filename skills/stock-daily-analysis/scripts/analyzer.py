@@ -226,10 +226,12 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     lines.append(f"| **趋势判断** | {ai_result.get('trend_prediction', 'N/A')} |")
     lines.append(f"| **置信度** | {ai_result.get('confidence_level', 'N/A')} |")
     lines.append("")
-    summary = ai_result.get('analysis_summary', '')
-    if summary:
-        lines.append(f"**一句话结论**: {summary}")
-        lines.append("")
+    # 一句话结论：基于 Python 信号拼接的事实型描述（LLM 必须在 Step 3 重写为独立解读）
+    operation = ai_result.get('operation_advice', '观望')
+    labels = ai_result.get('signal_labels', [])
+    summary = f"{operation}（信号: {', '.join(labels[:3]) if labels else '无'}）"
+    lines.append(f"**一句话结论**: {summary}")
+    lines.append("")
     lines.append("---")
     lines.append("")
 
@@ -305,33 +307,40 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     lines.append("---")
     lines.append("")
 
-    # 支撑压力位
+    # 支撑压力位（使用 ai_analysis.key_levels，确保与 LLM 引用一致）
+    key_levels = ai_result.get('key_levels', {})
     lines.append("## 支撑与压力位")
     lines.append("")
     lines.append("| 类型 | 价位 | 依据 |")
     lines.append("|------|------|------|")
-    for price, reason in support_levels:
-        lines.append(f"| 支撑位 | {_fmt_num(price)} | {reason} |")
-    for price, reason in resistance_levels:
-        lines.append(f"| 压力位 | {_fmt_num(price)} | {reason} |")
+    lines.append(f"| 强支撑 | {_fmt_num(key_levels.get('strong_support'))} | MA20 多头最后防线 |")
+    lines.append(f"| 短支撑 | {_fmt_num(key_levels.get('short_support'))} | MA5 短线防守线 |")
+    lines.append(f"| 第一压力 | {_fmt_num(key_levels.get('first_resistance'))} | 近 5 日最高 |")
+    lines.append(f"| 强压力 | {_fmt_num(key_levels.get('strong_resistance'))} | 前高（套牢盘）|")
+    reasonable = ai_result.get('reasonable_range', ())
+    if reasonable and len(reasonable) == 2:
+        lines.append("")
+        lines.append(f"**合理价值区间**: {_fmt_num(reasonable[0])} ~ {_fmt_num(reasonable[1])}")
     lines.append("")
     lines.append("---")
     lines.append("")
 
-    # 看多理由
-    buy_reason = ai_result.get('buy_reason', '')
-    if buy_reason:
+    # 看多理由（基于 signal_labels，LLM 在 Step 3 可改写为通顺文字）
+    signal_labels = ai_result.get('signal_labels', [])
+    if signal_labels:
         lines.append("## 看多理由")
         lines.append("")
-        lines.append(f"- {buy_reason}")
+        for label in signal_labels:
+            lines.append(f"- {label}")
         lines.append("")
 
-    # 风险提示
-    risk_warning = ai_result.get('risk_warning', '')
-    if risk_warning:
+    # 风险提示（基于 risk_points，LLM 必须全列，不得遗漏）
+    risk_points = ai_result.get('risk_points', [])
+    if risk_points:
         lines.append("## 风险提示")
         lines.append("")
-        lines.append(f"- {risk_warning}")
+        for point in risk_points:
+            lines.append(f"- {point}")
         lines.append("")
 
     lines.append("---")

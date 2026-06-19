@@ -137,6 +137,9 @@ class TrendAnalysisResult:
     prev_high_date: str = ""
     ma_support_count: int = 0
     ma_support_success_rate: float = 0.0
+    # 供 ai_analyzer 规则计算用
+    recent_5d_high: float = 0.0
+    latest_pct_chg: float = 0.0
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -187,6 +190,8 @@ class TrendAnalysisResult:
             'prev_high_date': self.prev_high_date,
             'ma_support_count': self.ma_support_count,
             'ma_support_success_rate': round(self.ma_support_success_rate, 2),
+            'recent_5d_high': round(self.recent_5d_high, 2),
+            'latest_pct_chg': round(self.latest_pct_chg, 2),
         }
 
 
@@ -774,6 +779,11 @@ class StockTrendAnalyzer:
             high_idx = recent['high'].idxmax()
             result.prev_high = float(recent.loc[high_idx, 'high'])
             result.prev_high_date = str(recent.loc[high_idx, 'date'])[:10]
+            # 近 5 日最高（用于 ai_analyzer 的第一压力位 + 量价规则）
+            result.recent_5d_high = float(df['high'].iloc[-5:].max())
+            # 当日涨跌幅（用于 ai_analyzer 的量价规则）
+            latest_row = df.iloc[-1]
+            result.latest_pct_chg = float(latest_row['pct_chg']) if 'pct_chg' in latest_row and latest_row['pct_chg'] == latest_row['pct_chg'] else 0.0
             if result.prev_high > 0:
                 # 正值=当前价低于前高（距前高还有多远），负值=已突破前高
                 result.near_high_pct = (result.prev_high - result.current_price) / result.prev_high * 100
