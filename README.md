@@ -91,6 +91,34 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-19 修复 RSI 字段名与计算周期不一致（commit dfc8f65）
+
+- **问题**：`RSI_LONG` 常量已是 20，但字段名、报告显示文案仍为 24（历史遗留），导致报告中显示 `RSI(24)` 但实际算的是 `RSI(20)`，与 20 天行情数据对不上
+- **修复**：3 个文件 5 处统一改为 20
+  - `trend_analyzer.py`：dataclass 字段 `rsi_24` → `rsi_20`（含 to_dict / 赋值处）
+  - `analyzer.py`：报告模板 `RSI(24)` → `RSI(20)`，`tech.get('rsi_24')` → `rsi_20`
+  - `SKILL.md`：占位符 `rsi_24` → `rsi_20`
+- 验证：`analyze_stock('600519')` 输出 rsi_6/12/20 均正常，rsi_24 字段已移除
+
+### 2026-06-18 技术指标计算改用前复权行情接口（commit d2b2988）
+
+- **问题**：旧逻辑用不复权行情算技术指标，除权除息日会出现虚假跳空，导致均线/MACD/RSI 失真
+- **数据用途分工**（按市场分析惯例）：
+  - 近 20 日展示 + 最新行情 + 昨收价 → `getStkDayQuoByCond-G`（不复权）
+  - 技术指标计算（均线/MACD/RSI/BIAS）→ `getDStkPriceMidDivByCond-G`（前复权）
+- **实现**：
+  - `data_fetcher.py`：`_run_query` 加 `api_id` 参数；新增 `_fetch_fq_quote`；`get_daily_data` 同时拉两份数据，按 date 合并 `open_fq/high_fq/low_fq/close_fq`；前复权拉取失败时退化用不复权
+  - `trend_analyzer.py`：`analyze` 入口把 OHLC 替换为前复权版本（保留 `*_raw`），下游所有指标计算代码不用改；`current_price` 用 `close_raw` 展示真实成交价
+- **验证**：工商银行 5/12 除权数据 close=7.48 vs close_fq=7.31，差异 0.17 元正是除权调整
+
+### 2026-06-18 修复安全扫描命中的 SSRF 风险（commit 5690893）
+
+- 扫描命中 3 条，核实后只有 1 条真实存在
+- **SSRF**（真实）：`query.py cmd_api` 中 `api_id` 直接拼接到 URL path，存在 path traversal 风险 → 加正则白名单 `^[A-Za-z0-9_-]+$`；`cmd_page_size` 同步加（防御深度）
+- **.env 注入 SSRF**（误报）：扫描器引用的 `_setup_key_interactively` 函数和 `api_query.py` 文件早在 6/12 commit `9ed84ff` 已删除
+- **环境变量 RCE**（误报）：`SKI_STOCK_MARKET_INFO_PATH` / `SKILL_DIR` / `API_QUERY_SCRIPT` 在当前代码中不存在
+- 与主线 agent commit `3fff527` 保持同构修复
+
 ### 2026-06-17 新增 Agent 路由边界与用户使用指引
 
 - **问题**：新设备测试时，AI 在用户指令模糊（如"看看股票"、"今天行情怎么样"）或指令不含具体股票代码/名称时，会误调用主线分析 / Wind / 板块分析等其他 agent，导致股票分析 agent 失效或答非所问
