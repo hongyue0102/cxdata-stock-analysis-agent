@@ -16,8 +16,16 @@ CXDA Skill - 统一查询脚本
 import argparse
 import json
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+# fcntl 仅 Unix 可用，Windows 下记账锁退化为无锁（单进程场景无影响）
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -57,6 +65,33 @@ CONFIRMATION_REQUIRED_STATUS = "confirmation_required"
 
 _TIME_FMT = "%Y-%m-%d %H:%M:%S"
 _DISPLAY_TZ = timezone(timedelta(hours=8))
+
+
+@contextmanager
+def _ledger_lock():
+    """账本文件锁：保护「读-改-写」整个临界区，防止并发 subprocess 互相覆盖。
+
+    并发调用时，多个 query.py 进程同时「读账本→追加→写账本」，若只锁写不锁读，
+    后写进程会覆盖先写进程的记录，导致积分记账大量丢失。此锁对整个临界区加排他锁。
+    Windows 无 fcntl，退化为无锁（单进程或低并发场景无影响）。
+    """
+    if not _HAS_FCNTL:
+        yield
+        return
+    lock_path = Path.home() / ".cxda-cache" / ".shared" / ".session_ledger.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    f = open(lock_path, "w")
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    finally:
+        f.close()
 
 
 def parse_params(args):
@@ -163,15 +198,17 @@ def _guard_before_billable_api_call():
     已有 50 次成功计费调用且尚未确认时，暂停而不调用接口，避免产生第 51 次消耗。
     """
     now = datetime.now()
-    ledger, calls = _get_active_ledger(now)
-    call_count = len(calls)
-    if call_count < BILLABLE_CALL_CONFIRMATION_THRESHOLD or ledger.get("confirmed_after_50") is True:
-        return
+    # 加锁：并发时多个进程同时检查 call_count 会导致超过 50 次才触发，锁保证计数准确
+    with _ledger_lock():
+        ledger, calls = _get_active_ledger(now)
+        call_count = len(calls)
+        if call_count < BILLABLE_CALL_CONFIRMATION_THRESHOLD or ledger.get("confirmed_after_50") is True:
+            return
 
-    ledger["requires_confirmation"] = True
-    ledger["confirmation_required_at_count"] = call_count
-    save_shared_json(SESSION_LEDGER_FILE, ledger)
-    return call_count
+        ledger["requires_confirmation"] = True
+        ledger["confirmation_required_at_count"] = call_count
+        save_shared_json(SESSION_LEDGER_FILE, ledger)
+        return call_count
 
 
 def _record_call_if_billable(api_id, data):
@@ -189,16 +226,18 @@ def _record_call_if_billable(api_id, data):
             return
 
         now = datetime.now()
-        ledger, calls = _get_active_ledger(now)
+        # 加锁保护「读-改-写」整个临界区，防止并发 subprocess 互相覆盖导致记账丢失
+        with _ledger_lock():
+            ledger, calls = _get_active_ledger(now)
 
-        calls.append({
-            "time": now.strftime(_TIME_FMT),
-            "api_id": api_id,
-            "consumed": consumed,
-        })
-        ledger["calls"] = calls
-        ledger["last_call_ts"] = now.timestamp()
-        save_shared_json(SESSION_LEDGER_FILE, ledger)
+            calls.append({
+                "time": now.strftime(_TIME_FMT),
+                "api_id": api_id,
+                "consumed": consumed,
+            })
+            ledger["calls"] = calls
+            ledger["last_call_ts"] = now.timestamp()
+            save_shared_json(SESSION_LEDGER_FILE, ledger)
     except Exception:
         # 记账为旁路逻辑，任何异常都不应影响接口数据返回
         pass

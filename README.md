@@ -91,6 +91,12 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-24 积分记账并发安全 + session 规范流程（同步主线 agent）
+
+- **query.py** 同步主线 agent 的 `_ledger_lock` 文件锁修复：给 `_record_call_if_billable` 和 `_guard_before_billable_api_call` 的「读-改-写」整个临界区加 flock 排他锁，根治并发 subprocess 互相覆盖导致积分记账丢失（同源工具，保持一致；当前本 agent 虽串行查单股不触发，但防患未然）
+- **analyzer.py** `analyze_stocks` 加 session 规范流程：开头 `session start` 重置账本，结尾 `session summary` 输出本轮消耗；积分消耗以 session summary 返回为准，不由 AI 自行统计
+- 说明：本 agent 是逐股查询（单股 pageSize=20），不存在主线 agent 的「pageSize 写死 10000」问题，故未做 pageSize 动态化
+
 ### 2026-06-23 修复安全扫描命中的路径遍历/RCE/XSS/日志注入风险（commit 3f38c49）
 
 - **问题**：安全扫描命中 6 条风险项，均为潜在风险（当前调用入口 filename 硬编码不可直接利用），但属纵深防御应加固

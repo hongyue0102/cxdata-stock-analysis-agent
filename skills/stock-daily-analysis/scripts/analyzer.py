@@ -6,13 +6,51 @@
 提供简单的调用接口
 """
 
+import json
 import logging
 import os
 import re
+import subprocess
+import sys
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_QUERY_SCRIPT = _SCRIPT_DIR / "query.py"
+
+
+def _session_start():
+    """调用 query.py session start，重置本轮积分账本。
+
+    规范要求：本轮首次业务调用前执行一次，确保积分记账从0开始、
+    会话统计以 session summary 返回为准（不依赖 AI 自行统计消耗）。
+    """
+    try:
+        cmd = [sys.executable, str(_QUERY_SCRIPT), "session", "start"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=str(_SCRIPT_DIR))
+        if result.returncode != 0:
+            logger.warning(f"session start 失败（不影响分析）: {result.stderr[:200]}")
+    except Exception as e:
+        logger.warning(f"session start 异常（不影响分析）: {e}")
+
+
+def _session_summary():
+    """调用 query.py session summary，输出本轮积分消耗汇总（以 query.py 记账为准）。"""
+    try:
+        cmd = [sys.executable, str(_QUERY_SCRIPT), "session", "summary"]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=str(_SCRIPT_DIR))
+        if result.returncode != 0 or not result.stdout.strip():
+            return
+        data = json.loads(result.stdout)
+        if data.get("success"):
+            print(f"\n=== 积分消耗汇总（以 session summary 为准）===")
+            print(f"  计费调用次数: {data.get('call_count')}")
+            print(f"  累计消耗积分: {data.get('total_consumed')}")
+    except Exception as e:
+        logger.warning(f"session summary 异常: {e}")
 
 
 # ── 输入净化 ──────────────────────────────────────────────────────────
@@ -135,6 +173,8 @@ def analyze_stocks(codes: List[str], config: Optional[Dict] = None) -> List[Dict
     Returns:
         分析结果列表
     """
+    # 规范：本轮首次业务调用前 session start，重置积分账本（记账以 query.py 为准）
+    _session_start()
     results = []
     for code in codes:
         try:
@@ -149,6 +189,8 @@ def analyze_stocks(codes: List[str], config: Optional[Dict] = None) -> List[Dict
                 'ai_analysis': {'operation_advice': '分析失败', 'sentiment_score': 0}
             })
 
+    # 规范：会话结束 session summary，输出本轮积分消耗（记账以 query.py 为准，不自行统计）
+    _session_summary()
     return results
 
 
