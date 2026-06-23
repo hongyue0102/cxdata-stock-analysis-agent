@@ -91,6 +91,16 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-23 修复安全扫描命中的路径遍历/RCE/XSS/日志注入风险（commit 3f38c49）
+
+- **问题**：安全扫描命中 6 条风险项，均为潜在风险（当前调用入口 filename 硬编码不可直接利用），但属纵深防御应加固
+- **修复**（4 文件，纯安全加固，无业务逻辑改动）：
+  - `cxda_cache_cli.py`：新增 `_validate_filename` 与 `_check_within_workspace`，拦截 `../` / 绝对路径 / 盘符逃逸；workspace 环境变量校验 `..` 段
+  - `common.py`：新增 `_validate_exec_path`，校验 `CXDA_CACHE_PYTHON` / `CXDA_CACHE_CLI_PATH`（必须绝对路径、不含 `..`、文件存在，CLI_PATH 需 `.py` 后缀）与 workspace 环境变量，非法时回退安全默认值，防环境变量注入 RCE
+  - `analyzer.py`：新增 `_sanitize_for_markdown` / `_sanitize_for_log`，净化拼入 markdown 报告的 code/name（防 XSS）与日志中的 code（防日志注入）
+  - `trend_analyzer.py`：logger 中的 code 经 `_sanitize_for_log` 净化
+- **验证**：4 文件 `py_compile` 通过；`../../etc/passwd` 等路径遍历被拦截，正常读写不受影响
+
 ### 2026-06-19 修复 RSI 字段名与计算周期不一致（commit dfc8f65）
 
 - **问题**：`RSI_LONG` 常量已是 20，但字段名、报告显示文案仍为 24（历史遗留），导致报告中显示 `RSI(24)` 但实际算的是 `RSI(20)`，与 20 天行情数据对不上
