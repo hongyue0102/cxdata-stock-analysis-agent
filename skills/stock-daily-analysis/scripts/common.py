@@ -38,19 +38,53 @@ REQUEST_CHANNEL = "CAXEN"
 
 # ── CLI 缓存封装 ──────────────────────────────────────────────────────
 
+def _validate_exec_path(path: str, env_var: str, expect_script: bool = False) -> str:
+    """
+    校验作为可执行路径的环境变量，防止通过环境变量注入任意命令/脚本。
+
+    - 必须为绝对路径（杜绝 PATH/相对路径劫持）；
+    - 解析后不得包含 .. 段；
+    - 文件必须实际存在；
+    - 若为脚本路径，文件名必须以 .py 结尾。
+
+    校验失败时回退到安全默认值，避免因攻击者控制环境变量而执行任意代码。
+    """
+    if not path or not isinstance(path, str):
+        return None
+
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        sys.stderr.write(f"[安全] {env_var} 必须为绝对路径，已忽略: {path}\n")
+        return None
+    if ".." in p.parts:
+        sys.stderr.write(f"[安全] {env_var} 含非法路径段，已忽略: {path}\n")
+        return None
+    if expect_script and p.suffix != ".py":
+        sys.stderr.write(f"[安全] {env_var} 必须指向 .py 脚本，已忽略: {path}\n")
+        return None
+    if not p.exists():
+        sys.stderr.write(f"[安全] {env_var} 指向的路径不存在，已忽略: {path}\n")
+        return None
+    return str(p)
+
+
 def _get_cli_path() -> Path:
     """获取 cxda_cache_cli.py 路径（本地优先）"""
-    env_path = os.environ.get("CXDA_CACHE_CLI_PATH")
-    if env_path:
-        return Path(env_path)
+    validated = _validate_exec_path(
+        os.environ.get("CXDA_CACHE_CLI_PATH"), "CXDA_CACHE_CLI_PATH", expect_script=True
+    )
+    if validated:
+        return Path(validated)
     return Path(__file__).parent / "cxda_cache_cli.py"
 
 
 def _get_python_exe() -> str:
     """获取 Python 执行路径"""
-    env_python = os.environ.get("CXDA_CACHE_PYTHON")
-    if env_python:
-        return env_python
+    validated = _validate_exec_path(
+        os.environ.get("CXDA_CACHE_PYTHON"), "CXDA_CACHE_PYTHON"
+    )
+    if validated:
+        return validated
     return sys.executable
 
 
@@ -62,11 +96,22 @@ def _get_workspace() -> str:
     1. CXDA_CACHE_WORKSPACE 环境变量
     2. CLAUDE_WORKSPACE 环境变量
     3. 默认 ~/.cxda-cache
-    """
-    workspace = os.environ.get("CXDA_CACHE_WORKSPACE") \
-        or os.environ.get("CLAUDE_WORKSPACE") \
-        or str(Path.home() / ".cxda-cache")
 
+    环境变量必须为绝对路径且不含 .. 段，否则回退到默认值，防止任意位置写入。
+    """
+    for env_var in ["CXDA_CACHE_WORKSPACE", "CLAUDE_WORKSPACE"]:
+        path = os.environ.get(env_var)
+        if not path:
+            continue
+        p = Path(path).expanduser()
+        if not p.is_absolute() or ".." in p.parts:
+            sys.stderr.write(f"[安全] {env_var} 非法路径，已回退默认值: {path}\n")
+            continue
+        workspace = str(p)
+        Path(workspace).mkdir(parents=True, exist_ok=True)
+        return workspace
+
+    workspace = str(Path.home() / ".cxda-cache")
     Path(workspace).mkdir(parents=True, exist_ok=True)
     return workspace
 

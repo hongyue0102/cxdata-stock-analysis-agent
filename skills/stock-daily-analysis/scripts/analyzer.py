@@ -8,10 +8,38 @@
 
 import logging
 import os
+import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+
+# ── 输入净化 ──────────────────────────────────────────────────────────
+
+# 控制字符与换行（防日志注入 / 报告结构破坏）
+_CONTROL_RE = re.compile(r"[\r\n\t\x00-\x1f\x7f]")
+
+
+def _sanitize_for_log(value: str) -> str:
+    """净化日志输出，剥离换行等控制字符，防止日志注入/伪造审计条目"""
+    if value is None:
+        return ""
+    return _CONTROL_RE.sub(" ", str(value))
+
+
+def _sanitize_for_markdown(value: str) -> str:
+    """
+    净化拼入 markdown 报告的用户可控字段（股票代码、名称等），
+    剥离控制字符并转义 HTML 特殊字符，防止报告渲染为 HTML 时触发 XSS。
+    """
+    if value is None:
+        return ""
+    cleaned = _CONTROL_RE.sub(" ", str(value))
+    return (cleaned.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace('"', "&quot;"))
 
 # 导入模块
 from scripts.data_fetcher import get_daily_data
@@ -48,14 +76,14 @@ def analyze_stock(code: str, config: Optional[Dict] = None) -> Dict[str, Any]:
     if config is None:
         config = load_config()
 
-    logger.info(f"开始分析股票: {code}")
+    logger.info(f"开始分析股票: {_sanitize_for_log(code)}")
 
     # 获取历史数据和股票名称（仅使用日行情接口）
     days = config.get('data', {}).get('days', 20)
     result = get_daily_data(code, days=days)
 
     if result is None:
-        logger.error(f"无法获取 {code} 的数据")
+        logger.error(f"无法获取 {_sanitize_for_log(code)} 的数据")
         return {
             'code': code,
             'name': code,
@@ -67,7 +95,7 @@ def analyze_stock(code: str, config: Optional[Dict] = None) -> Dict[str, Any]:
     df, name = result
 
     if df.empty:
-        logger.error(f"无法获取 {code} 的数据")
+        logger.error(f"无法获取 {_sanitize_for_log(code)} 的数据")
         return {
             'code': code,
             'name': name,
@@ -92,7 +120,7 @@ def analyze_stock(code: str, config: Optional[Dict] = None) -> Dict[str, Any]:
         'ai_analysis': ai_result
     }
 
-    logger.info(f"{code} 分析完成，技术面评分: {ai_result.get('sentiment_score', trend_result.signal_score)}")
+    logger.info(f"{_sanitize_for_log(code)} 分析完成，技术面评分: {ai_result.get('sentiment_score', trend_result.signal_score)}")
     return result
 
 
@@ -113,7 +141,7 @@ def analyze_stocks(codes: List[str], config: Optional[Dict] = None) -> List[Dict
             result = analyze_stock(code, config)
             results.append(result)
         except Exception as e:
-            logger.error(f"分析 {code} 时出错: {e}")
+            logger.error(f"分析 {_sanitize_for_log(code)} 时出错: {e}")
             results.append({
                 'code': code,
                 'name': code,
@@ -178,7 +206,7 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
 
     df, name = data_result
     if df.empty:
-        return f"❌ {code} ({name}) 行情数据为空，无法生成报告。"
+        return f"❌ {_sanitize_for_markdown(code)} ({_sanitize_for_markdown(name)}) 行情数据为空，无法生成报告。"
 
     # 2. 技术分析
     trend_analyzer = StockTrendAnalyzer()
@@ -209,7 +237,10 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     today = datetime.now().strftime('%Y-%m-%d')
     lines = []
 
-    lines.append(f"# {code} {name} 股票分析报告")
+    # 净化用户可控字段，防止报告渲染为 HTML 时触发 XSS
+    safe_code = _sanitize_for_markdown(code)
+    safe_name = _sanitize_for_markdown(name)
+    lines.append(f"# {safe_code} {safe_name} 股票分析报告")
     lines.append("")
     lines.append(f"> 生成时间: {today} | 数据来源: 财新数据平台 | 分析工具: A股技术分析系统")
     lines.append("")

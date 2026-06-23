@@ -9,6 +9,7 @@
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from enum import Enum
@@ -17,6 +18,19 @@ import pandas as pd
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+# ── 输入净化 ──────────────────────────────────────────────────────────
+
+# 控制字符与换行（防日志注入）
+_CONTROL_RE = re.compile(r"[\r\n\t\x00-\x1f\x7f]")
+
+
+def _sanitize_for_log(value) -> str:
+    """净化日志输出，剥离换行等控制字符，防止日志注入/伪造审计条目"""
+    if value is None:
+        return ""
+    return _CONTROL_RE.sub(" ", str(value))
 
 
 class TrendStatus(Enum):
@@ -268,7 +282,7 @@ class StockTrendAnalyzer:
         self._spread_threshold = self._limit_pct * 0.5
         
         if df is None or df.empty or len(df) < 20:
-            logger.warning(f"{code} 数据不足，无法进行趋势分析")
+            logger.warning(f"{_sanitize_for_log(code)} 数据不足，无法进行趋势分析")
             result.risk_factors.append("数据不足，无法完成分析")
             return result
 
@@ -284,9 +298,9 @@ class StockTrendAnalyzer:
             df['open'] = df['open_fq']
             df['high'] = df['high_fq']
             df['low'] = df['low_fq']
-            logger.info(f"{code} 技术指标计算使用前复权价格")
+            logger.info(f"{_sanitize_for_log(code)} 技术指标计算使用前复权价格")
         else:
-            logger.warning(f"{code} 无前复权字段，技术指标退化为不复权价格")
+            logger.warning(f"{_sanitize_for_log(code)} 无前复权字段，技术指标退化为不复权价格")
 
         # 确保数据按日期排序
         df = df.sort_values('date').reset_index(drop=True)

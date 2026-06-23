@@ -26,6 +26,29 @@ except ImportError:
     _HAS_FCNTL = False
 
 
+# ── 安全校验 ──────────────────────────────────────────────────────────
+
+def _validate_filename(filename: str) -> str:
+    """
+    校验文件名，防止路径遍历（如 ../、绝对路径、盘符）。
+
+    仅允许纯文件名（可含子目录但禁止逃逸 workspace）。
+    """
+    if not filename or not isinstance(filename, str):
+        raise ValueError("文件名不能为空")
+
+    # 禁止绝对路径与盘符（Windows）
+    if os.path.isabs(filename) or ":" in filename.split(os.sep)[0]:
+        raise ValueError(f"非法文件名（禁止绝对路径）: {filename}")
+
+    # 解析后不得包含 .. 段，也不得逃出目标目录
+    parts = Path(filename).parts
+    if ".." in parts:
+        raise ValueError(f"非法文件名（禁止路径遍历）: {filename}")
+
+    return filename
+
+
 # ── 工作空间探测 ──────────────────────────────────────────────────────
 
 def detect_workspace() -> Path:
@@ -40,7 +63,11 @@ def detect_workspace() -> Path:
     for env_var in ["CXDA_CACHE_WORKSPACE", "CLAUDE_WORKSPACE"]:
         path = os.environ.get(env_var)
         if path:
-            workspace = Path(path).expanduser().resolve()
+            # 校验：禁止空值、相对路径中的 .. 逃逸（必须是明确的目标目录）
+            workspace = Path(path).expanduser()
+            if ".." in workspace.parts:
+                raise ValueError(f"非法 workspace 路径（禁止 .. 逃逸）: {path}")
+            workspace = workspace.resolve()
             workspace.mkdir(parents=True, exist_ok=True)
             return workspace
 
@@ -63,13 +90,22 @@ class CacheManager:
         shared_dir = self.workspace / ".shared"
         shared_dir.mkdir(parents=True, exist_ok=True)
 
+    def _check_within_workspace(self, resolved: Path) -> Path:
+        """确保解析后的路径仍位于 workspace 内，防止符号链接/..逃逸"""
+        try:
+            resolved.relative_to(self.workspace)
+        except ValueError:
+            raise ValueError(f"路径逃逸出 workspace: {resolved}")
+        return resolved
+
     # ==================== 公域数据管理 ====================
 
     def _get_shared_path(self, filename: str) -> Path:
         """获取公域文件路径"""
+        _validate_filename(filename)
         shared_dir = self.workspace / ".shared"
         shared_dir.mkdir(parents=True, exist_ok=True)
-        return shared_dir / filename
+        return self._check_within_workspace((shared_dir / filename).resolve())
 
     def shared_read(self, filename: str) -> dict:
         """读取公域文件"""
@@ -195,15 +231,19 @@ class CacheManager:
 
     def _get_skill_path(self, skill_name: str, subdir: str = "data") -> Path:
         """获取 Skill 目录路径"""
+        _validate_filename(skill_name)
         if subdir not in self.SUBDIR_TYPES:
             raise ValueError(f"未知子目录类型: {subdir}。可用: {list(self.SUBDIR_TYPES.keys())}")
         skill_path = self.workspace / skill_name / subdir
         skill_path.mkdir(parents=True, exist_ok=True)
-        return skill_path
+        return self._check_within_workspace(skill_path.resolve())
 
     def _get_file_path(self, skill_name: str, filename: str, subdir: str = "data") -> Path:
         """获取文件完整路径"""
-        return self._get_skill_path(skill_name, subdir) / filename
+        _validate_filename(filename)
+        return self._check_within_workspace(
+            (self._get_skill_path(skill_name, subdir) / filename).resolve()
+        )
 
     def write(self, skill_name: str, filename: str, content: str,
               subdir: str = "data", append: bool = False) -> dict:
@@ -270,6 +310,7 @@ class CacheManager:
 
     def list_files(self, skill_name: str, subdir: str = None) -> dict:
         """列出文件"""
+        _validate_filename(skill_name)
         if subdir:
             paths = [self._get_skill_path(skill_name, subdir)]
         else:
