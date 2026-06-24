@@ -56,6 +56,15 @@ def _mask_phone(phone: str) -> str:
     return phone[:3] + "****" + phone[-4:]
 
 
+def _safe_net_error(e: Exception) -> str:
+    """网络异常脱敏（缓解风险2/3：异常消息泄露 url 含手机号/验证码）。
+
+    requests 的异常 str(e) 常包含完整请求 URL（query string 里有 phone/verifyCode），
+    直接输出会暴露手机号和验证码。此处只保留异常类型名，丢弃可能含敏感信息的消息体。
+    """
+    return type(e).__name__
+
+
 # ── 命令：terms-check ─────────────────────────────────────────────────
 
 def cmd_terms_check():
@@ -137,7 +146,7 @@ def cmd_send_code(phone: str):
     except Exception as e:
         print(json.dumps({
             "code": "10500",
-            "msg": f"网络异常：{str(e)}",
+            "msg": f"网络异常：{_safe_net_error(e)}",
             "data": ""
         }, ensure_ascii=False))
 
@@ -204,7 +213,7 @@ def cmd_verify(phone: str, code: str):
     except Exception as e:
         print(json.dumps({
             "code": "10500",
-            "msg": f"网络异常：{str(e)}",
+            "msg": f"网络异常：{_safe_net_error(e)}",
             "data": "",
         }, ensure_ascii=False))
 

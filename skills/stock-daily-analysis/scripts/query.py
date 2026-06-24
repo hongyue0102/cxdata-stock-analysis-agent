@@ -15,6 +15,7 @@ CXDA Skill - 统一查询脚本
 
 import argparse
 import json
+import re
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -525,6 +526,13 @@ def cmd_package(api_main=""):
 
     认证方式：userKey
     """
+    # 安全校验（缓解风险1 SQLi）：api_main 与 api_id 保持一致的白名单校验，
+    # 拒绝非合法标识符（含 SQL 注入 payload、特殊字符）的输入
+    if api_main and not re.match(r"^[A-Za-z0-9_-]+$", api_main):
+        output_json({"code": "10400", "msg": f"非法 api-main 参数: {api_main!r}",
+                     "package_count": 0, "packages": []})
+        return
+
     accepted, error_response = check_terms_accepted()
     if not accepted:
         output_json(error_response)

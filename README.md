@@ -91,6 +91,20 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-24 安全扫描 6 条风险修复（按客户要求）
+
+客户扫描命中 6 条输入验证/凭证类风险，逐条核实后全部修复：
+
+| # | 风险 | 修复 |
+|---|---|---|
+| 1 | cmd_package 的 --api-main SQLi | `query.py` cmd_package 开头加 `^[A-Za-z0-9_-]+$` 白名单校验，与 api_id 一致，拒绝 SQL 注入 payload；顶部补 import re |
+| 2/3 | verify/send-code 异常泄露 url（含验证码/手机号）| `auth.py` 新增 `_safe_net_error(e)`，网络异常只返回异常类型名，剥离含 phone/verifyCode 的 url；send-code、verify 两处 except 改用 |
+| 4 | 凭证文件权限过松（默认 0o644）| `cxda_cache_cli.py` 新增 `_secure_write_text`（os.open 指定 0o600），shared_write/私域 write 改用它；5 处 mkdir 加 `mode=0o700` |
+| 5 | get/save_shared_json 路径遍历 | `common.py` 新增 `_validate_shared_filename`，filename 只允许字母数字下划线连字符点（CLI 侧 _validate_filename 已有防护，入口层双保险）|
+| 6 | http_get SSRF | `common.py` http_get 加 url 白名单，必须以 BASE_URL 开头（官方 cxdata 域名），拒绝其他 host |
+
+**验证**：6 条防护端到端测试通过（api;DROP 拒绝、../etc 拒绝且正常名不误伤、evil.com 拒绝、异常不含手机号/验证码、文件权限 0o600）
+
 ### 2026-06-24 排除 B 股（仅分析 A 股）
 
 - **问题**：`normalize_code` 对 6 位数字代码统一判成 'a'（A股），**不识别 B 股**。用户传 B 股代码（上交所 900 开头、深交所 200 开头）会被当 A 股查询、生成报告，与本 agent「仅分析 A 股」定位不符。

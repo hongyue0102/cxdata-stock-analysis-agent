@@ -194,6 +194,22 @@ def save_auth(data: dict):
 
 # ── 公域 JSON 文件读写（跨 Skill 共享，如会话账本） ──────────────────────
 
+import re as _re
+# filename 只允许 字母/数字/下划线/连字符/点，禁止路径分隔符和 ..（缓解风险5 路径遍历）
+_SHARED_FILENAME_RE = _re.compile(r'^[A-Za-z0-9_.\-]+$')
+
+
+def _validate_shared_filename(filename: str) -> str:
+    """校验公域文件名格式（缓解风险5：路径遍历）。
+
+    只允许字母/数字/下划线/连字符/点，拒绝含 / \\ .. 等路径成分的文件名。
+    CLI 侧 _validate_filename 已有防护，此处为入口层防御。
+    """
+    if not isinstance(filename, str) or not filename or not _SHARED_FILENAME_RE.match(filename):
+        raise ValueError(f"非法公域文件名（仅允许字母数字下划线连字符点）: {filename!r}")
+    return filename
+
+
 def get_shared_json(filename: str) -> dict:
     """
     读取公域 JSON 文件，文件不存在或解析失败时返回空字典。
@@ -201,6 +217,7 @@ def get_shared_json(filename: str) -> dict:
     注意：cxda_cache_cli.py 的 `shared read` 成功时直接输出文件内容（JSON），
     失败时输出 {"success": false, "error": ...}，此处据此区分。
     """
+    filename = _validate_shared_filename(filename)
     result = _cli_call("shared", "read", [filename])
     if isinstance(result, dict):
         if result.get("success") is False and "error" in result:
@@ -211,6 +228,7 @@ def get_shared_json(filename: str) -> dict:
 
 def save_shared_json(filename: str, data: dict):
     """写入公域 JSON 文件（覆盖写）"""
+    filename = _validate_shared_filename(filename)
     _cli_call("shared", "write", [filename, "--content", json.dumps(data, ensure_ascii=False)])
 
 
@@ -342,8 +360,15 @@ def http_get(url: str, params: dict = None, include_channel: bool = True) -> dic
 
     Returns:
         解析后的 JSON 数据字典
+
+    安全（缓解风险6 SSRF）：url 必须以 BASE_URL 开头（白名单），拒绝任何其他 host，
+    防止外部输入把请求导向内部服务或任意地址。
     """
     import requests
+
+    # SSRF 防护：只允许请求 BASE_URL（官方 cxdata 域名），拒绝其他
+    if not isinstance(url, str) or not url.startswith(BASE_URL):
+        raise ValueError(f"拒绝非白名单 URL 请求（仅允许 {BASE_URL}）: {url!r}")
 
     params = dict(params or {})
     if include_channel and REQUEST_CHANNEL:

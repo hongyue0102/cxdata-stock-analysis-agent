@@ -49,6 +49,23 @@ def _validate_filename(filename: str) -> str:
     return filename
 
 
+def _secure_write_text(file_path: Path, content: str, append: bool = False) -> None:
+    """以 0o600 权限写文本文件（缓解风险4：默认 0o644 可被同机用户读取凭证）。
+
+    用 os.open + O_CREAT 指定 mode，不依赖 umask；保留 fcntl 文件锁。
+    """
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+    fd = os.open(file_path, flags, 0o600)
+    with os.fdopen(fd, "a" if append else "w", encoding="utf-8") as f:
+        if _HAS_FCNTL:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.write(content)
+        finally:
+            if _HAS_FCNTL:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
 # ── 工作空间探测 ──────────────────────────────────────────────────────
 
 def detect_workspace() -> Path:
@@ -68,11 +85,11 @@ def detect_workspace() -> Path:
             if ".." in workspace.parts:
                 raise ValueError(f"非法 workspace 路径（禁止 .. 逃逸）: {path}")
             workspace = workspace.resolve()
-            workspace.mkdir(parents=True, exist_ok=True)
+            workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
             return workspace
 
     workspace = Path.home() / ".cxda-cache"
-    workspace.mkdir(parents=True, exist_ok=True)
+    workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
     return workspace
 
 
@@ -88,7 +105,7 @@ class CacheManager:
     def _ensure_structure(self):
         """确保基础目录结构存在"""
         shared_dir = self.workspace / ".shared"
-        shared_dir.mkdir(parents=True, exist_ok=True)
+        shared_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     def _check_within_workspace(self, resolved: Path) -> Path:
         """确保解析后的路径仍位于 workspace 内，防止符号链接/..逃逸"""
@@ -104,7 +121,7 @@ class CacheManager:
         """获取公域文件路径"""
         _validate_filename(filename)
         shared_dir = self.workspace / ".shared"
-        shared_dir.mkdir(parents=True, exist_ok=True)
+        shared_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         return self._check_within_workspace((shared_dir / filename).resolve())
 
     def shared_read(self, filename: str) -> dict:
@@ -121,19 +138,11 @@ class CacheManager:
             return {"success": False, "error": str(e)}
 
     def shared_write(self, filename: str, content: str) -> dict:
-        """写入公域文件（带文件锁保护）"""
+        """写入公域文件（权限 0o600，带文件锁保护）"""
         file_path = self._get_shared_path(filename)
 
         try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                if _HAS_FCNTL:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                try:
-                    f.write(content)
-                finally:
-                    if _HAS_FCNTL:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-
+            _secure_write_text(file_path, content, append=False)
             return {"success": True, "path": str(file_path), "file": filename}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -235,7 +244,7 @@ class CacheManager:
         if subdir not in self.SUBDIR_TYPES:
             raise ValueError(f"未知子目录类型: {subdir}。可用: {list(self.SUBDIR_TYPES.keys())}")
         skill_path = self.workspace / skill_name / subdir
-        skill_path.mkdir(parents=True, exist_ok=True)
+        skill_path.mkdir(parents=True, exist_ok=True, mode=0o700)
         return self._check_within_workspace(skill_path.resolve())
 
     def _get_file_path(self, skill_name: str, filename: str, subdir: str = "data") -> Path:
@@ -247,20 +256,11 @@ class CacheManager:
 
     def write(self, skill_name: str, filename: str, content: str,
               subdir: str = "data", append: bool = False) -> dict:
-        """写入私域文件"""
+        """写入私域文件（权限 0o600）"""
         file_path = self._get_file_path(skill_name, filename, subdir)
-        mode = "a" if append else "w"
 
         try:
-            with open(file_path, mode, encoding="utf-8") as f:
-                if _HAS_FCNTL:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                try:
-                    f.write(content)
-                finally:
-                    if _HAS_FCNTL:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-
+            _secure_write_text(file_path, content, append=append)
             return {
                 "success": True,
                 "path": str(file_path),
