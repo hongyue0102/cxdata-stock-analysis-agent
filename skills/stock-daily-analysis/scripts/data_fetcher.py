@@ -102,6 +102,11 @@ def _fetch_fq_quote(code: str, page: int, page_size: int = 20) -> Optional[Dict]
 def normalize_code(stock_code: str) -> tuple:
     code = stock_code.strip()
     if code.isdigit() and len(code) == 6:
+        # B 股识别（本 agent 仅分析 A 股，需排除 B 股）：
+        # 上交所 B 股 900 开头、深交所 B 股 200 开头。判成 'b' 市场，
+        # 由 get_daily_data 的 market!='a' 校验拒绝，避免 B 股被当 A 股分析。
+        if code.startswith("900") or code.startswith("200"):
+            return 'b', code
         return 'a', code
     if re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', code.upper()):
         return 'us', code.upper()

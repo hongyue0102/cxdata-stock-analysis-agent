@@ -91,6 +91,12 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-24 排除 B 股（仅分析 A 股）
+
+- **问题**：`normalize_code` 对 6 位数字代码统一判成 'a'（A股），**不识别 B 股**。用户传 B 股代码（上交所 900 开头、深交所 200 开头）会被当 A 股查询、生成报告，与本 agent「仅分析 A 股」定位不符。
+- **修复**：`data_fetcher.py` `normalize_code` 增加 B 股识别——900/200 开头判成 'b' 市场，由 `get_daily_data` 的 `market != 'a'` 校验拒绝（日志提示「仅支持 A 股，为 b 市场代码」）。
+- **验证**：900901/200002 识别为 b 并被拒绝返回 None；600000/000001/688478/920083/AAPL/00700 不误伤。
+
 ### 2026-06-24 积分记账并发安全 + session 规范流程（同步主线 agent）
 
 - **query.py** 同步主线 agent 的 `_ledger_lock` 文件锁修复：给 `_record_call_if_billable` 和 `_guard_before_billable_api_call` 的「读-改-写」整个临界区加 flock 排他锁，根治并发 subprocess 互相覆盖导致积分记账丢失（同源工具，保持一致；当前本 agent 虽串行查单股不触发，但防患未然）
