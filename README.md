@@ -91,6 +91,17 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-25 风险 3 终极加固：cred_crypto 改硬依赖，彻底消除“无加密分支”
+
+风险 3（缺 cryptography 则明文存储）此前用 `try/except ImportError` + `save_auth` 内 raise 拦截。但静态扫描器（如火山）若按模式匹配判定，看到 `except ImportError` 分支存在仍会报。为对两种扫描规则都免疫，改为硬依赖：
+
+- `common.py` 删除 `try/except ImportError`，直接 `import cred_crypto`；缺失库时直接终止，不存在“无加密执行”分支
+- 清理 `_HAS_CRYPTO` 变量及死分支；老明文读取兼容不丢
+
+**改动文件**：`common.py`（与主线 agent 同步）
+
+**验证**：残留为 0；加密写入/透明解密/老明文读取兼容回归通过
+
 ### 2026-06-25 同步主线 agent：cxda_cache_cli 私域 read/write 路径遍历防护
 
 主线 agent 第 8 条报出 cxda_cache_cli 私域 read/write 的 skill/file 参数缺路径遍历校验。本 agent 代码同源存在相同问题（本次扫描虽未单独报，但纵深防御一并修复）：

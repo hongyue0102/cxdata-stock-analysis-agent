@@ -14,14 +14,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Tuple
 
-# 凭证加解密（缓解风险3：CXDA_USER_KEY 明文存储）
-# 缺失 cryptography 库时不退化到明文落盘：_HAS_CRYPTO=False 时 save_auth 拒绝写入
-# CXDA_USER_KEY，避免任何“明文写文件”的代码路径。
-try:
-    import cred_crypto
-    _HAS_CRYPTO = True
-except ImportError:
-    _HAS_CRYPTO = False
+# 凭证加解密（硬依赖，缓解风险3：杜绝任何“无加密执行”分支）。
+# 缺失 cryptography 库时直接 ImportError 终止，绝不退化到明文存储。
+# requirements.txt 已声明 cryptography，部署环境须 pip install。
+import cred_crypto
 
 # ── Windows 编码修复 ──────────────────────────────────────────────────
 if sys.platform == "win32":
@@ -184,13 +180,11 @@ def check_terms_accepted() -> Tuple[bool, dict]:
 def save_auth(data: dict):
     """保存认证数据到缓存（合并更新）。
 
-    CXDA_USER_KEY 落盘前统一加密（缓解风险1/4：明文存储），所有调用方无需各自处理。
-    安全：数据通过 stdin 传给 CLI，不作为命令行参数，避免出现在进程列表（缓解风险2）；
-    未启用加密时拒绝写入 CXDA_USER_KEY，消除明文落盘代码路径。
+    CXDA_USER_KEY 落盘前统一加密（缓解风险3：明文存储），所有调用方无需各自处理。
+    安全：数据通过 stdin 传给 CLI，不作为命令行参数，避免出现在进程列表（缓解风险2）。
+    cred_crypto 为硬依赖（顶部 import），不存在无加密分支。
     """
     if isinstance(data, dict) and data.get("CXDA_USER_KEY"):
-        if not _HAS_CRYPTO:
-            raise RuntimeError("凭证加密模块不可用，拒绝以明文存储 CXDA_USER_KEY")
         key = data["CXDA_USER_KEY"]
         if not cred_crypto.is_encrypted(key):
             data = {**data, "CXDA_USER_KEY": cred_crypto.encrypt(key)}
@@ -285,9 +279,6 @@ def get_user_key() -> str:
     stored = auth.get("CXDA_USER_KEY", "")
     if not stored:
         return ""
-    if not _HAS_CRYPTO:
-        # 加密模块不可用：缓存中只可能是历史明文，原样返回（仅读取，不涉及写入）
-        return stored
     plaintext, needs_migration = cred_crypto.decrypt(stored)
     if needs_migration and plaintext:
         try:
