@@ -91,6 +91,19 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-25 同步主线 agent：凭证经 stdin 传递（堵住风险 2/3，与主线 agent 安全等级对齐）
+
+主线 agent 客户深度扫描新报出风险 2/3：`save_auth → _cli_call → subprocess` 链路把 CXDA_USER_KEY 经**命令行参数**传递（ps aux 可见）、异常消息含完整命令行。本 agent 代码同源存在相同问题，本次同步主线 agent 的根治方案：
+
+- 风险2：`cxda_cache_cli.py` `auth set --data` 改可选、缺省从 stdin 读；`common.py` `save_auth` 改用 `stdin_input` 传，密钥不再进 argv
+- 风险3：`common.py` `_cli_call` except 脱敏，按异常类型返回（TimeoutExpired/FileNotFoundError/类型名），不把含敏感参数的 cmd 放入 error
+
+**改动文件**：`common.py`、`cxda_cache_cli.py`（文档无需同步，认证调用方式上一轮已改 stdin）
+
+**验证**：语法编译通过；save_auth 改用 stdin（argv 不含 --data、input 收到数据）、异常脱敏（不含敏感串）、auth set 从 stdin 写入读回成功、`_cli_call` 与主线 agent 逐字节一致
+
+**连带影响**：上游若有直接拼 `cxda_cache_cli.py auth set --data` 的代码需改 stdin（`--data` 仍兼容向后）
+
 ### 2026-06-25 安全扫描 6 条风险二轮修复（根治：改到发源地 + 消除危险模式）
 
 上一轮（2026-06-24 commit 944b149）虽标注"6 条全修复"，但经 git 历史核实，`query.py` 的 `parse_params`/`cmd_api` 自鉴权升级（6-17）后未再改动，风险 4/5/6 的发源地实际未触及；风险 1/2/3 改的多是脱敏/加密，扫描器基于静态模式匹配仍持续告警。本轮针对根因重做，确保扫描器看不到任何危险模式。

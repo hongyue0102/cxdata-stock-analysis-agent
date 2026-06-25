@@ -95,7 +95,7 @@ def _get_workspace() -> str:
     return workspace
 
 
-def _cli_call(command: str, subcommand: str = None, args: list = None, raw_output: bool = False) -> dict:
+def _cli_call(command: str, subcommand: str = None, args: list = None, raw_output: bool = False, stdin_input: str = None) -> dict:
     """
     调用 cxda_cache_cli.py CLI
 
@@ -104,9 +104,12 @@ def _cli_call(command: str, subcommand: str = None, args: list = None, raw_outpu
         subcommand: 子命令（get, set, read, write 等）
         args: 额外参数列表
         raw_output: 是否返回原始输出
+        stdin_input: 通过 stdin 传入的内容（用于传敏感数据，避免出现在进程列表，缓解风险2）
 
     Returns:
         CLI 返回的 JSON 字典
+
+    安全（缓解风险3）：异常时不把完整 cmd（可能含敏感参数）放入 error，只返回脱敏的类型信息。
     """
     args = args or []
     cmd = [_get_python_exe(), str(_get_cli_path()), command]
@@ -118,7 +121,14 @@ def _cli_call(command: str, subcommand: str = None, args: list = None, raw_outpu
     env.setdefault("CXDA_CACHE_WORKSPACE", _get_workspace())
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+        result = subprocess.run(
+            cmd,
+            input=stdin_input,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
         stdout = result.stdout.strip() if result.stdout else ""
 
         if raw_output:
@@ -130,8 +140,13 @@ def _cli_call(command: str, subcommand: str = None, args: list = None, raw_outpu
             except json.JSONDecodeError:
                 return {"success": True, "content": stdout}
         return {"success": False, "error": "Empty output"}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "CLI 调用超时"}
+    except FileNotFoundError:
+        return {"success": False, "error": "CLI 可执行文件不存在"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        # 脱敏：不返回可能含敏感参数的完整命令行，只返回异常类型名（缓解风险3）
+        return {"success": False, "error": "CLI 调用失败：{}".format(type(e).__name__)}
 
 
 # ── 认证数据读写 ──────────────────────────────────────────────────────
@@ -169,9 +184,9 @@ def check_terms_accepted() -> Tuple[bool, dict]:
 def save_auth(data: dict):
     """保存认证数据到缓存（合并更新）。
 
-    CXDA_USER_KEY 落盘前统一加密（缓解风险3：明文存储），所有调用方无需各自处理。
-    安全：未启用加密（_HAS_CRYPTO=False）时，若数据含 CXDA_USER_KEY 则拒绝写入，
-    杜绝明文落盘的代码路径。
+    CXDA_USER_KEY 落盘前统一加密（缓解风险1/4：明文存储），所有调用方无需各自处理。
+    安全：数据通过 stdin 传给 CLI，不作为命令行参数，避免出现在进程列表（缓解风险2）；
+    未启用加密时拒绝写入 CXDA_USER_KEY，消除明文落盘代码路径。
     """
     if isinstance(data, dict) and data.get("CXDA_USER_KEY"):
         if not _HAS_CRYPTO:
@@ -179,7 +194,7 @@ def save_auth(data: dict):
         key = data["CXDA_USER_KEY"]
         if not cred_crypto.is_encrypted(key):
             data = {**data, "CXDA_USER_KEY": cred_crypto.encrypt(key)}
-    _cli_call("auth", "set", ["--data", json.dumps(data, ensure_ascii=False)])
+    _cli_call("auth", "set", stdin_input=json.dumps(data, ensure_ascii=False))
 
 
 # ── 公域 JSON 文件读写（跨 Skill 共享，如会话账本） ──────────────────────

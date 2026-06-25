@@ -424,7 +424,8 @@ def main():
     auth_get.add_argument("--key", "-k", help="特定键（可选）")
 
     auth_set = auth_subparsers.add_parser("set", help="设置认证信息")
-    auth_set.add_argument("--data", "-d", required=True, help="JSON格式的认证数据")
+    # --data 可选：缺省时从 stdin 读取，避免含密钥的 JSON 出现在进程列表（缓解风险2）
+    auth_set.add_argument("--data", "-d", help="JSON格式的认证数据（缺省时从stdin读取）")
 
     auth_delete = auth_subparsers.add_parser("delete", help="删除认证字段")
     auth_delete.add_argument("--key", "-k", help="特定键（可选，不指定则清空所有）")
@@ -490,8 +491,15 @@ def main():
                     print(json.dumps(data, ensure_ascii=False, indent=2))
                 return
         elif args.auth_cmd == "set":
+            # 优先命令行 --data；缺省时从 stdin 读取，避免密钥出现在进程列表（缓解风险2）
+            raw_data = args.data
+            if not raw_data:
+                if sys.stdin.isatty():
+                    print(json.dumps({"success": False, "error": "缺少认证数据：请通过 --data 或 stdin 传入 JSON"}, ensure_ascii=False))
+                    return
+                raw_data = sys.stdin.read()
             try:
-                auth_data = json.loads(args.data)
+                auth_data = json.loads(raw_data)
             except json.JSONDecodeError as e:
                 print(json.dumps({"success": False, "error": f"JSON解析错误: {e}"}, ensure_ascii=False))
                 return
