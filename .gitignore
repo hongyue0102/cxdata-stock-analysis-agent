@@ -11,3 +11,6 @@ stock-analysis/
 
 # macOS
 .DS_Store
+
+# 改动前备份目录（本地用，不提交）
+skills/*/scripts/_backup_*/

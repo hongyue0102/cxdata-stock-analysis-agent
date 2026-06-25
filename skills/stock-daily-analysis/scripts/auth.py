@@ -57,11 +57,7 @@ def _mask_phone(phone: str) -> str:
 
 
 def _safe_net_error(e: Exception) -> str:
-    """网络异常脱敏（缓解风险2/3：异常消息泄露 url 含手机号/验证码）。
-
-    requests 的异常 str(e) 常包含完整请求 URL（query string 里有 phone/verifyCode），
-    直接输出会暴露手机号和验证码。此处只保留异常类型名，丢弃可能含敏感信息的消息体。
-    """
+    """网络异常脱敏（缓解异常消息泄露 url 含手机号/验证码）。只返回异常类型名。"""
     return type(e).__name__
 
 
@@ -200,6 +196,8 @@ def cmd_verify(phone: str, code: str):
             auth_data = get_cached_auth()
             auth_data.update({
                 "CXDA_USER_KEY": user_key,
+                "authtoken": "",
+                "authtoken_expire": "",
                 "phone_masked": phone_masked,
                 "authed_at": int(time.time())
             })

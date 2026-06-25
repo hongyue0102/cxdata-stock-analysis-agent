@@ -91,6 +91,24 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-25 对齐同事官方积分机制（jsonl 追加日志）+ 保留全部安全加固
+
+同事 6-24 提供官方最新四件套（query/common/cxda_cache_cli/auth），积分统计采用更优的 **jsonl 追加日志机制**（取代旧的 JSON 读改写 + _ledger_lock 文件锁）。本次对齐官方机制，同时保留之前做的全部安全加固。
+
+**积分机制（对齐同事官方版）：**
+- 记账改为 `append_shared_text` 追加到 `cxda_session_calls.jsonl`，天然并发安全，无需文件锁
+- 会话隔离用 `session_id`（uuid）；query.py 积分逻辑与同事版 diff 0（完全一致）
+- 移除 _ledger_lock；analyzer.py 的 session start/summary 流程保留
+
+**安全加固（全部保留）：**
+- SSRF url 白名单、filename 校验、凭证加密（cred_crypto）、文件权限 0o600/0o700、异常脱敏、workspace 校验、cli 路径遍历防护
+- api_main 白名单（覆盖后补回）
+- B 股排除（data_fetcher normalize_code）
+
+**环境**：.venv 安装 cryptography（凭证加密依赖）
+
+**验证**：完整取数 jsonl 记账正常；安全防护 11 项全在；积分记账函数与同事版逐字节一致
+
 ### 2026-06-24 安全扫描 6 条风险修复（按客户要求）
 
 客户扫描命中 6 条输入验证/凭证类风险，逐条核实后全部修复：

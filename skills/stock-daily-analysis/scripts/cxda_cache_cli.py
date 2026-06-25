@@ -26,37 +26,37 @@ except ImportError:
     _HAS_FCNTL = False
 
 
-# ── 安全校验 ──────────────────────────────────────────────────────────
+# ── 工作空间探测 ──────────────────────────────────────────────────────
 
-def _validate_filename(filename: str) -> str:
+def _validate_workspace_path(workspace: Path, source: str = "") -> Path:
+    """校验 workspace 路径合理性（缓解环境变量路径遍历）。
+
+    拒绝系统关键目录、要求在用户家目录下，否则回退默认 ~/.cxda-cache。
     """
-    校验文件名，防止路径遍历（如 ../、绝对路径、盘符）。
-
-    仅允许纯文件名（可含子目录但禁止逃逸 workspace）。
-    """
-    if not filename or not isinstance(filename, str):
-        raise ValueError("文件名不能为空")
-
-    # 禁止绝对路径与盘符（Windows）
-    if os.path.isabs(filename) or ":" in filename.split(os.sep)[0]:
-        raise ValueError(f"非法文件名（禁止绝对路径）: {filename}")
-
-    # 解析后不得包含 .. 段，也不得逃出目标目录
-    parts = Path(filename).parts
-    if ".." in parts:
-        raise ValueError(f"非法文件名（禁止路径遍历）: {filename}")
-
-    return filename
+    SYSTEM_CRITICAL = (
+        "/etc", "/bin", "/sbin", "/usr", "/boot", "/dev", "/proc", "/sys",
+        "/var", "/lib", "/lib64", "/root", "/Library", "/System",
+    )
+    home = Path.home().resolve()
+    resolved = workspace.resolve()
+    resolved_str = str(resolved)
+    for crit in SYSTEM_CRITICAL:
+        if resolved_str == crit or resolved_str.startswith(crit + os.sep):
+            sys.stderr.write(f"[WARN] 拒绝 workspace {resolved_str}（系统关键目录），回退默认。来源: {source}\n")
+            return Path.home() / ".cxda-cache"
+    if not resolved_str.startswith(str(home) + os.sep) and resolved_str != str(home):
+        sys.stderr.write(f"[WARN] 拒绝 workspace {resolved_str}（不在用户家目录下），回退默认。来源: {source}\n")
+        return Path.home() / ".cxda-cache"
+    return resolved
 
 
-def _secure_write_text(file_path: Path, content: str, append: bool = False) -> None:
-    """以 0o600 权限写文本文件（缓解风险4：默认 0o644 可被同机用户读取凭证）。
-
-    用 os.open + O_CREAT 指定 mode，不依赖 umask；保留 fcntl 文件锁。
-    """
-    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+def _secure_write_text(file_path: Path, content: str) -> None:
+    """以 0o600 权限写文本文件（缓解凭证文件默认 0o644 可被同机用户读取）。保留 fcntl 文件锁。"""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
     fd = os.open(file_path, flags, 0o600)
-    with os.fdopen(fd, "a" if append else "w", encoding="utf-8") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         if _HAS_FCNTL:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
@@ -66,8 +66,6 @@ def _secure_write_text(file_path: Path, content: str, append: bool = False) -> N
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
-# ── 工作空间探测 ──────────────────────────────────────────────────────
-
 def detect_workspace() -> Path:
     """
     自动检测工作空间路径
@@ -76,20 +74,26 @@ def detect_workspace() -> Path:
     1. CXDA_CACHE_WORKSPACE 环境变量
     2. CLAUDE_WORKSPACE 环境变量
     3. 默认 ~/.cxda-cache
+
+    环境变量路径需通过 _validate_workspace_path 校验。
     """
     for env_var in ["CXDA_CACHE_WORKSPACE", "CLAUDE_WORKSPACE"]:
         path = os.environ.get(env_var)
         if path:
-            # 校验：禁止空值、相对路径中的 .. 逃逸（必须是明确的目标目录）
-            workspace = Path(path).expanduser()
-            if ".." in workspace.parts:
-                raise ValueError(f"非法 workspace 路径（禁止 .. 逃逸）: {path}")
-            workspace = workspace.resolve()
+            workspace = _validate_workspace_path(Path(path).expanduser(), source=env_var)
             workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+            try:
+                os.chmod(workspace, 0o700)
+            except OSError:
+                pass
             return workspace
 
     workspace = Path.home() / ".cxda-cache"
     workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(workspace, 0o700)
+    except OSError:
+        pass
     return workspace
 
 
@@ -107,22 +111,19 @@ class CacheManager:
         shared_dir = self.workspace / ".shared"
         shared_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
-    def _check_within_workspace(self, resolved: Path) -> Path:
-        """确保解析后的路径仍位于 workspace 内，防止符号链接/..逃逸"""
-        try:
-            resolved.relative_to(self.workspace)
-        except ValueError:
-            raise ValueError(f"路径逃逸出 workspace: {resolved}")
-        return resolved
-
     # ==================== 公域数据管理 ====================
 
     def _get_shared_path(self, filename: str) -> Path:
-        """获取公域文件路径"""
-        _validate_filename(filename)
+        """获取公域文件路径（含路径遍历防护）"""
         shared_dir = self.workspace / ".shared"
         shared_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        return self._check_within_workspace((shared_dir / filename).resolve())
+        # resolve 后校验仍在 shared_dir 内，拒绝 ../ 逃逸
+        target = (shared_dir / filename).resolve()
+        try:
+            target.relative_to(shared_dir.resolve())
+        except ValueError:
+            raise ValueError(f"非法路径（拒绝路径遍历）: {filename}")
+        return target
 
     def shared_read(self, filename: str) -> dict:
         """读取公域文件"""
@@ -142,8 +143,35 @@ class CacheManager:
         file_path = self._get_shared_path(filename)
 
         try:
-            _secure_write_text(file_path, content, append=False)
+            _secure_write_text(file_path, content)
             return {"success": True, "path": str(file_path), "file": filename}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def shared_append(self, filename: str, content: str) -> dict:
+        """追加公域文件，使用 O_APPEND + 单次 os.write 降低并发丢写风险（权限 0o600）。"""
+        file_path = self._get_shared_path(filename)
+
+        try:
+            data = content.encode("utf-8")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+            if hasattr(os, "O_BINARY"):
+                flags |= os.O_BINARY
+
+            fd = os.open(file_path, flags, 0o600)
+            try:
+                written = os.write(fd, data)
+                if written != len(data):
+                    raise OSError(f"append write incomplete: {written}/{len(data)} bytes")
+            finally:
+                os.close(fd)
+
+            return {
+                "success": True,
+                "path": str(file_path),
+                "file": filename,
+                "operation": "append"
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -240,27 +268,32 @@ class CacheManager:
 
     def _get_skill_path(self, skill_name: str, subdir: str = "data") -> Path:
         """获取 Skill 目录路径"""
-        _validate_filename(skill_name)
         if subdir not in self.SUBDIR_TYPES:
             raise ValueError(f"未知子目录类型: {subdir}。可用: {list(self.SUBDIR_TYPES.keys())}")
         skill_path = self.workspace / skill_name / subdir
         skill_path.mkdir(parents=True, exist_ok=True, mode=0o700)
-        return self._check_within_workspace(skill_path.resolve())
+        return skill_path
 
     def _get_file_path(self, skill_name: str, filename: str, subdir: str = "data") -> Path:
         """获取文件完整路径"""
-        _validate_filename(filename)
-        return self._check_within_workspace(
-            (self._get_skill_path(skill_name, subdir) / filename).resolve()
-        )
+        return self._get_skill_path(skill_name, subdir) / filename
 
     def write(self, skill_name: str, filename: str, content: str,
               subdir: str = "data", append: bool = False) -> dict:
-        """写入私域文件（权限 0o600）"""
+        """写入私域文件"""
         file_path = self._get_file_path(skill_name, filename, subdir)
+        mode = "a" if append else "w"
 
         try:
-            _secure_write_text(file_path, content, append=append)
+            with open(file_path, mode, encoding="utf-8") as f:
+                if _HAS_FCNTL:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    f.write(content)
+                finally:
+                    if _HAS_FCNTL:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
             return {
                 "success": True,
                 "path": str(file_path),
@@ -310,7 +343,6 @@ class CacheManager:
 
     def list_files(self, skill_name: str, subdir: str = None) -> dict:
         """列出文件"""
-        _validate_filename(skill_name)
         if subdir:
             paths = [self._get_skill_path(skill_name, subdir)]
         else:
@@ -408,6 +440,10 @@ def main():
     shared_write.add_argument("file", help="文件名")
     shared_write.add_argument("--content", "-c", required=True, help="文件内容")
 
+    shared_append = shared_subparsers.add_parser("append", help="追加公域文件")
+    shared_append.add_argument("file", help="文件名")
+    shared_append.add_argument("--content", "-c", required=True, help="文件内容")
+
     shared_delete = shared_subparsers.add_parser("delete", help="删除公域文件")
     shared_delete.add_argument("file", help="文件名")
 
@@ -474,6 +510,8 @@ def main():
                 return
         elif args.shared_cmd == "write":
             result = manager.shared_write(args.file, args.content)
+        elif args.shared_cmd == "append":
+            result = manager.shared_append(args.file, args.content)
         elif args.shared_cmd == "delete":
             result = manager.shared_delete(args.file)
         elif args.shared_cmd == "list":

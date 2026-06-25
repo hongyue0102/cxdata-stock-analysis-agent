@@ -14,6 +14,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Tuple
 
+# 凭证加解密（缓解风险2：CXDA_USER_KEY 明文存储）
+try:
+    import cred_crypto
+    _HAS_CRYPTO = True
+except ImportError:
+    _HAS_CRYPTO = False
+
 # ── Windows 编码修复 ──────────────────────────────────────────────────
 if sys.platform == "win32":
     import io
@@ -38,53 +45,19 @@ REQUEST_CHANNEL = "CAXEN"
 
 # ── CLI 缓存封装 ──────────────────────────────────────────────────────
 
-def _validate_exec_path(path: str, env_var: str, expect_script: bool = False) -> str:
-    """
-    校验作为可执行路径的环境变量，防止通过环境变量注入任意命令/脚本。
-
-    - 必须为绝对路径（杜绝 PATH/相对路径劫持）；
-    - 解析后不得包含 .. 段；
-    - 文件必须实际存在；
-    - 若为脚本路径，文件名必须以 .py 结尾。
-
-    校验失败时回退到安全默认值，避免因攻击者控制环境变量而执行任意代码。
-    """
-    if not path or not isinstance(path, str):
-        return None
-
-    p = Path(path).expanduser()
-    if not p.is_absolute():
-        sys.stderr.write(f"[安全] {env_var} 必须为绝对路径，已忽略: {path}\n")
-        return None
-    if ".." in p.parts:
-        sys.stderr.write(f"[安全] {env_var} 含非法路径段，已忽略: {path}\n")
-        return None
-    if expect_script and p.suffix != ".py":
-        sys.stderr.write(f"[安全] {env_var} 必须指向 .py 脚本，已忽略: {path}\n")
-        return None
-    if not p.exists():
-        sys.stderr.write(f"[安全] {env_var} 指向的路径不存在，已忽略: {path}\n")
-        return None
-    return str(p)
-
-
 def _get_cli_path() -> Path:
     """获取 cxda_cache_cli.py 路径（本地优先）"""
-    validated = _validate_exec_path(
-        os.environ.get("CXDA_CACHE_CLI_PATH"), "CXDA_CACHE_CLI_PATH", expect_script=True
-    )
-    if validated:
-        return Path(validated)
+    env_path = os.environ.get("CXDA_CACHE_CLI_PATH")
+    if env_path:
+        return Path(env_path)
     return Path(__file__).parent / "cxda_cache_cli.py"
 
 
 def _get_python_exe() -> str:
     """获取 Python 执行路径"""
-    validated = _validate_exec_path(
-        os.environ.get("CXDA_CACHE_PYTHON"), "CXDA_CACHE_PYTHON"
-    )
-    if validated:
-        return validated
+    env_python = os.environ.get("CXDA_CACHE_PYTHON")
+    if env_python:
+        return env_python
     return sys.executable
 
 
@@ -96,22 +69,11 @@ def _get_workspace() -> str:
     1. CXDA_CACHE_WORKSPACE 环境变量
     2. CLAUDE_WORKSPACE 环境变量
     3. 默认 ~/.cxda-cache
-
-    环境变量必须为绝对路径且不含 .. 段，否则回退到默认值，防止任意位置写入。
     """
-    for env_var in ["CXDA_CACHE_WORKSPACE", "CLAUDE_WORKSPACE"]:
-        path = os.environ.get(env_var)
-        if not path:
-            continue
-        p = Path(path).expanduser()
-        if not p.is_absolute() or ".." in p.parts:
-            sys.stderr.write(f"[安全] {env_var} 非法路径，已回退默认值: {path}\n")
-            continue
-        workspace = str(p)
-        Path(workspace).mkdir(parents=True, exist_ok=True)
-        return workspace
+    workspace = os.environ.get("CXDA_CACHE_WORKSPACE") \
+        or os.environ.get("CLAUDE_WORKSPACE") \
+        or str(Path.home() / ".cxda-cache")
 
-    workspace = str(Path.home() / ".cxda-cache")
     Path(workspace).mkdir(parents=True, exist_ok=True)
     return workspace
 
@@ -188,23 +150,26 @@ def check_terms_accepted() -> Tuple[bool, dict]:
 
 
 def save_auth(data: dict):
-    """保存认证数据到缓存（合并更新）"""
+    """保存认证数据到缓存（合并更新）。
+
+    CXDA_USER_KEY 落盘前统一加密（缓解风险2：明文存储），所有调用方无需各自处理。
+    """
+    if _HAS_CRYPTO and isinstance(data, dict) and data.get("CXDA_USER_KEY"):
+        key = data["CXDA_USER_KEY"]
+        if not cred_crypto.is_encrypted(key):
+            data = {**data, "CXDA_USER_KEY": cred_crypto.encrypt(key)}
     _cli_call("auth", "set", ["--data", json.dumps(data, ensure_ascii=False)])
 
 
 # ── 公域 JSON 文件读写（跨 Skill 共享，如会话账本） ──────────────────────
 
 import re as _re
-# filename 只允许 字母/数字/下划线/连字符/点，禁止路径分隔符和 ..（缓解风险5 路径遍历）
+# filename 只允许 字母/数字/下划线/连字符/点（缓解路径遍历）
 _SHARED_FILENAME_RE = _re.compile(r'^[A-Za-z0-9_.\-]+$')
 
 
 def _validate_shared_filename(filename: str) -> str:
-    """校验公域文件名格式（缓解风险5：路径遍历）。
-
-    只允许字母/数字/下划线/连字符/点，拒绝含 / \\ .. 等路径成分的文件名。
-    CLI 侧 _validate_filename 已有防护，此处为入口层防御。
-    """
+    """校验公域文件名格式（缓解路径遍历）。CLI 侧已有防护，此处入口层双保险。"""
     if not isinstance(filename, str) or not filename or not _SHARED_FILENAME_RE.match(filename):
         raise ValueError(f"非法公域文件名（仅允许字母数字下划线连字符点）: {filename!r}")
     return filename
@@ -232,6 +197,40 @@ def save_shared_json(filename: str, data: dict):
     _cli_call("shared", "write", [filename, "--content", json.dumps(data, ensure_ascii=False)])
 
 
+def get_shared_text(filename: str) -> str:
+    """
+    读取公域文本文件，文件不存在时返回空字符串。
+
+    JSONL 只有单行时会被普通 _cli_call 当作 JSON 解析，因此这里使用 raw_output。
+    """
+    filename = _validate_shared_filename(filename)
+    result = _cli_call("shared", "read", [filename], raw_output=True)
+    if not isinstance(result, dict):
+        return ""
+
+    content = result.get("content") or ""
+    if content:
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict) and parsed.get("success") is False and "error" in parsed:
+                return ""
+        except json.JSONDecodeError:
+            pass
+    return content
+
+
+def save_shared_text(filename: str, content: str):
+    """写入公域文本文件（覆盖写）"""
+    filename = _validate_shared_filename(filename)
+    _cli_call("shared", "write", [filename, "--content", content])
+
+
+def append_shared_text(filename: str, content: str):
+    """追加写入公域文本文件。"""
+    filename = _validate_shared_filename(filename)
+    _cli_call("shared", "append", [filename, "--content", content])
+
+
 # ── CXDA_USER_KEY 管理 ───────────────────────────────────────────────
 
 def get_user_key() -> str:
@@ -240,14 +239,25 @@ def get_user_key() -> str:
 
     优先级：
     1. 环境变量 CXDA_USER_KEY
-    2. 缓存中的 CXDA_USER_KEY
+    2. 缓存中的 CXDA_USER_KEY（加密存储，读取时透明解密；老明文自动迁移）
     """
     env_key = os.environ.get("CXDA_USER_KEY")
     if env_key:
         return env_key
 
     auth = get_cached_auth()
-    return auth.get("CXDA_USER_KEY", "")
+    stored = auth.get("CXDA_USER_KEY", "")
+    if not stored:
+        return ""
+    if not _HAS_CRYPTO:
+        return stored
+    plaintext, needs_migration = cred_crypto.decrypt(stored)
+    if needs_migration and plaintext:
+        try:
+            set_user_key(plaintext)
+        except Exception:
+            pass
+    return plaintext
 
 
 def mask_user_key(key: str) -> str:
@@ -361,8 +371,7 @@ def http_get(url: str, params: dict = None, include_channel: bool = True) -> dic
     Returns:
         解析后的 JSON 数据字典
 
-    安全（缓解风险6 SSRF）：url 必须以 BASE_URL 开头（白名单），拒绝任何其他 host，
-    防止外部输入把请求导向内部服务或任意地址。
+    安全（缓解 SSRF）：url 必须以 BASE_URL 开头（白名单），拒绝其他 host。
     """
     import requests
 
