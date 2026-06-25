@@ -91,6 +91,16 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-25 同步主线 agent：cxda_cache_cli 私域 read/write 路径遍历防护
+
+主线 agent 第 8 条报出 cxda_cache_cli 私域 read/write 的 skill/file 参数缺路径遍历校验。本 agent 代码同源存在相同问题（本次扫描虽未单独报，但纵深防御一并修复）：
+
+- `cxda_cache_cli.py` `_get_file_path` 新增双重防护：入口白名单（字母数字下划线连字符点）+ resolve 校验（`relative_to`），拒绝 `../`、`/`、URL 编码等逃逸
+
+**改动文件**：`cxda_cache_cli.py`
+
+**验证**：11/11 逃逸变体全部拦截，合法名不误伤
+
 ### 2026-06-25 同步主线 agent：凭证经 stdin 传递（堵住风险 2/3，与主线 agent 安全等级对齐）
 
 主线 agent 客户深度扫描新报出风险 2/3：`save_auth → _cli_call → subprocess` 链路把 CXDA_USER_KEY 经**命令行参数**传递（ps aux 可见）、异常消息含完整命令行。本 agent 代码同源存在相同问题，本次同步主线 agent 的根治方案：

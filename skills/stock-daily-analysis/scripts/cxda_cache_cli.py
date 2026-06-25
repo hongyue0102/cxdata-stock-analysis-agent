@@ -275,8 +275,27 @@ class CacheManager:
         return skill_path
 
     def _get_file_path(self, skill_name: str, filename: str, subdir: str = "data") -> Path:
-        """获取文件完整路径"""
-        return self._get_skill_path(skill_name, subdir) / filename
+        """获取文件完整路径（含路径遍历防护）。
+
+        双重防护（缓解路径遍历）：
+        1. 入口白名单：skill_name / filename 只允许字母数字下划线连字符点，
+           从源头拒绝 ../ 、/ 、URL编码(%2f) 等路径分隔与逃逸字符；
+        2. resolve 校验：目标路径 resolve 后必须仍位于 skill 子目录内。
+        """
+        # 入口白名单：禁止任何路径分隔符与逃逸字符
+        _SAFE_NAME_RE = __import__("re").compile(r"^[A-Za-z0-9_.\-]+$")
+        if not isinstance(skill_name, str) or not _SAFE_NAME_RE.match(skill_name) or ".." in skill_name:
+            raise ValueError(f"非法 skill 名称（拒绝路径遍历）: {skill_name!r}")
+        if not isinstance(filename, str) or not _SAFE_NAME_RE.match(filename) or ".." in filename:
+            raise ValueError(f"非法 file 名称（拒绝路径遍历）: {filename!r}")
+
+        skill_path = self._get_skill_path(skill_name, subdir)
+        target = (skill_path / filename).resolve()
+        try:
+            target.relative_to(skill_path.resolve())
+        except ValueError:
+            raise ValueError(f"非法路径（拒绝路径遍历）: skill={skill_name!r}, file={filename!r}")
+        return target
 
     def write(self, skill_name: str, filename: str, content: str,
               subdir: str = "data", append: bool = False) -> dict:
