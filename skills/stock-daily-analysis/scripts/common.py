@@ -399,19 +399,33 @@ def http_get(url: str, params: dict = None, include_channel: bool = True) -> dic
     Returns:
         解析后的 JSON 数据字典
 
-    安全（缓解 SSRF）：url 必须以 BASE_URL 开头（白名单），拒绝其他 host。
+    安全（缓解风险6 SSRF）：校验 url 的 scheme/host/path，只允许官方域名且 path
+    必须以 BASE_URL 的 path 前缀开头（/cxda/），拒绝跨 path 访问（如 /cxdaevil/）。
     """
     import requests
+    from urllib.parse import urlparse
 
-    # SSRF 防护：只允许请求 BASE_URL（官方 cxdata 域名），拒绝其他
-    if not isinstance(url, str) or not url.startswith(BASE_URL):
-        raise ValueError(f"拒绝非白名单 URL 请求（仅允许 {BASE_URL}）: {url!r}")
+    # SSRF 防护：scheme/host/path 三重校验，防止绕过到同域其他 path
+    base = urlparse(BASE_URL)
+    parsed = urlparse(url) if isinstance(url, str) else None
+    if (
+        not parsed
+        or parsed.scheme != base.scheme
+        or parsed.netloc != base.netloc
+        or not parsed.path.startswith(base.path + "/")
+    ):
+        # 脱敏：不回显完整 url（可能含敏感参数，缓解风险7）
+        raise ValueError("拒绝非白名单 URL 请求（仅允许官方 cxdata 接口路径）")
 
     params = dict(params or {})
     if include_channel and REQUEST_CHANNEL:
         params["requestChannel"] = REQUEST_CHANNEL
 
-    resp = requests.get(url, params=params, headers=HEADERS, proxies=PROXIES)
+    try:
+        resp = requests.get(url, params=params, headers=HEADERS, proxies=PROXIES, timeout=30)
+    except Exception:
+        # 脱敏：不抛含 url 的原始异常（缓解风险7）
+        raise RuntimeError("网络请求失败")
 
     # 尝试 gzip + base64 解码
     try:
@@ -419,7 +433,10 @@ def http_get(url: str, params: dict = None, include_channel: bool = True) -> dic
         return data
     except Exception:
         # 非 gzip 数据，直接 JSON 解析
-        return json.loads(resp.text)
+        try:
+            return json.loads(resp.text)
+        except Exception:
+            raise RuntimeError("响应解析失败")
 
 
 # ── 输出工具 ──────────────────────────────────────────────────────────

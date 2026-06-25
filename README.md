@@ -91,6 +91,18 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-25 补漏：http_get 同步主线（SSRF host+path 双校验 + 异常脱敏，风险 6/7）
+
+最终核查发现 stock 的 `http_get` 仍是老版本（仅 `startswith(BASE_URL)`，缺风险 6 的 SSRF path 校验和风险 7 的异常脱敏）。stock 反馈未单独报这两条，但代码同源存在隐患，本次同步主线方案：
+
+- `common.py` `http_get` URL 校验改为 scheme/host/path 三重校验（path 必须以 `/cxda/` 开头，拒绝 `/cxdaevil/`）
+- `http_get` 内部 catch `requests.get` / `json.loads` 异常，转 `RuntimeError` 脱敏（不抛含 url 的原始异常）
+- 修复后 `http_get` 与主线 agent 逐字节一致
+
+**改动文件**：`common.py`
+
+**验证**：合法业务 URL（`/cxda/`）放行、跨 path/外部域拒绝；与主线 `http_get` 差异 0 行
+
 ### 2026-06-25 风险 3 终极加固：cred_crypto 改硬依赖，彻底消除“无加密分支”
 
 风险 3（缺 cryptography 则明文存储）此前用 `try/except ImportError` + `save_auth` 内 raise 拦截。但静态扫描器（如火山）若按模式匹配判定，看到 `except ImportError` 分支存在仍会报。为对两种扫描规则都免疫，改为硬依赖：
