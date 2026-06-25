@@ -65,14 +65,36 @@ _DISPLAY_TZ = timezone(timedelta(hours=8))
 _PAGE_SIZE_CACHE = None
 
 
+# 脚本内部管理的保留字段，禁止用户通过 key=value 覆盖（缓解风险4：authtoken 越权覆盖）
+_FORBIDDEN_PARAM_KEYS = {"authtoken", "userKey", "requestChannel"}
+
+
 def parse_params(args):
-    """解析命令行参数，支持 key=value 格式"""
+    """解析命令行参数，支持 key=value 格式
+
+    安全：拒绝覆盖 authtoken/userKey/requestChannel 等保留字段，防止水平越权。
+    """
     params = {}
     for arg in args:
         if '=' in arg:
             k, v = arg.split('=', 1)
-            params[k.strip()] = v.strip()
+            k = k.strip()
+            if k in _FORBIDDEN_PARAM_KEYS:
+                raise ValueError("禁止覆盖保留参数（脚本自动管理）: {}".format(k))
+            params[k] = v.strip()
     return params
+
+
+# API ID 白名单：仅允许字母开头，字母/数字/下划线/连字符，禁止 . / \ 等路径与注入字符
+# 缓解风险5（URL 路径遍历，{api_id}.htm 拼接）与风险6（apiMain 查询参数注入）
+_API_ID_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_-]*$')
+
+
+def _validate_api_id(api_id):
+    """校验 API ID，拦截路径遍历（../）与注入字符。"""
+    if not isinstance(api_id, str) or not _API_ID_RE.match(api_id):
+        raise ValueError("非法 API ID（仅允许字母数字下划线连字符）: {!r}".format(api_id))
+    return api_id
 
 
 # ── 会话积分账本 ──────────────────────────────────────────────────────
@@ -462,6 +484,7 @@ def cmd_api(api_id, params):
     认证方式：authtoken（自动从缓存获取或刷新）
     响应格式：gzip + base64 编码
     """
+    _validate_api_id(api_id)
     accepted, error_response = check_terms_accepted()
     if not accepted:
         output_json(error_response)
@@ -607,6 +630,7 @@ def cmd_page_size(api_id):
 
     认证方式：userKey
     """
+    _validate_api_id(api_id)
     accepted, error_response = check_terms_accepted()
     if not accepted:
         output_json(error_response)
@@ -634,10 +658,13 @@ def cmd_package(api_main=""):
     认证方式：userKey
     """
     # 安全校验（缓解 SQLi）：api_main 白名单，拒绝特殊字符/注入 payload
-    if api_main and not re.match(r"^[A-Za-z0-9_-]+$", api_main):
-        output_json({"code": "10400", "msg": f"非法 api-main 参数: {api_main!r}",
-                     "package_count": 0, "packages": []})
-        return
+    if api_main:
+        try:
+            _validate_api_id(api_main)
+        except ValueError as e:
+            output_json({"code": "10400", "msg": str(e),
+                         "package_count": 0, "packages": []})
+            return
 
     accepted, error_response = check_terms_accepted()
     if not accepted:
