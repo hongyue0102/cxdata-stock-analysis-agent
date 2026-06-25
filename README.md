@@ -91,6 +91,27 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-25 安全扫描 6 条风险二轮修复（根治：改到发源地 + 消除危险模式）
+
+上一轮（2026-06-24 commit 944b149）虽标注"6 条全修复"，但经 git 历史核实，`query.py` 的 `parse_params`/`cmd_api` 自鉴权升级（6-17）后未再改动，风险 4/5/6 的发源地实际未触及；风险 1/2/3 改的多是脱敏/加密，扫描器基于静态模式匹配仍持续告警。本轮针对根因重做，确保扫描器看不到任何危险模式。
+
+| # | 风险 | 本轮修复（改到发源地） |
+|---|---|---|
+| 4 | authtoken 水平越权覆盖 | `query.py` `parse_params` 新增 `_FORBIDDEN_PARAM_KEYS` 黑名单，拒绝用户通过 `key=value` 覆盖 authtoken/userKey/requestChannel |
+| 5 | api_id URL 路径遍历 | `query.py` 新增 `_validate_api_id` 正则白名单（`^[A-Za-z][A-Za-z0-9_-]*$`），`cmd_api`/`cmd_page_size` 入口强制校验，拦截 `../` |
+| 6 | apiMain 注入 | 同 `_validate_api_id`（api_id 同时用于 apiMain 透传）；`cmd_package` 的 api_main 校验统一收敛到 `_validate_api_id` |
+| 3 | 凭证明文落盘 | `common.py` `save_auth` 在 `_HAS_CRYPTO=False` 时**拒绝写入** CXDA_USER_KEY，消除"明文写文件"代码路径（不再有退化分支） |
+| 2 | 环境变量 RCE | `common.py` 新增 `_safe_env_path`，`CXDA_CACHE_PYTHON`/`CLI_PATH`/`WORKSPACE`/`CLAUDE_WORKSPACE` 取值过滤 shell 元字符（`;｜&$\`等），非法回退默认值 |
+| 1 | phone/code 进程列表可见 | `auth.py` send-code/verify 去掉 `--phone`/`--code` 命令行参数，改为 **stdin（JSON）读取**；同步 AGENT.md / SKILL.md / auth-flow.md 共 4 处调用方式 |
+
+**改动文件**：`query.py`、`common.py`、`auth.py` + `AGENT.md`、`cxdata-stock-market-information/SKILL.md`、`references/auth-flow.md`
+
+**验证**：4 文件语法编译通过；白名单/黑名单/环境变量元字符/stdin 读取 5 项冒烟测试全过（正常值放行、`../`/`;`/`｜`/`authtoken=` 全拒绝、缺参优雅报错不崩溃）
+
+**连带影响（需知悉）**：
+- 风险 1 改了认证调用接口：上层 Agent 调用 send-code/verify 须改用 stdin 传 JSON，文档已同步
+- 风险 3 改为强约束：运行环境须 `pip install cryptography`（项目本就用 .venv 装），否则写 CXDA_USER_KEY 会 RuntimeError（宁可报错不明文存储）
+
 ### 2026-06-25 对齐同事官方积分机制（jsonl 追加日志）+ 保留全部安全加固
 
 同事 6-24 提供官方最新四件套（query/common/cxda_cache_cli/auth），积分统计采用更优的 **jsonl 追加日志机制**（取代旧的 JSON 读改写 + _ledger_lock 文件锁）。本次对齐官方机制，同时保留之前做的全部安全加固。

@@ -93,9 +93,11 @@ cd {Agent目录}/skills/stock-daily-analysis/scripts && python3 auth.py status
 - `authenticated: false` → 引导用户通过手机号验证码登录：
 
   ```bash
-  python3 auth.py send-code --phone <手机号>
-  python3 auth.py verify --phone <手机号> --code <验证码>
+  echo '{"phone":"<手机号>"}' | python3 auth.py send-code
+  echo '{"phone":"<手机号>","code":"<验证码>"}' | python3 auth.py verify
   ```
+
+  > 手机号与验证码通过 stdin（JSON）传入，**不**通过命令行参数，避免暴露在进程列表（`ps aux`）。
 
 > **安全提示**：`status` 输出的 `CXDA_USER_KEY` 已脱敏（仅显示前4后4字符），不要向用户展示或记录该字段。
 > 协议接受状态与登录密钥持久化在本地共享缓存中，同一设备的所有财新数据 Agent 共享，无需重复认证。

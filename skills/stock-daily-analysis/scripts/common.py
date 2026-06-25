@@ -14,7 +14,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Tuple
 
-# 凭证加解密（缓解风险2：CXDA_USER_KEY 明文存储）
+# 凭证加解密（缓解风险3：CXDA_USER_KEY 明文存储）
+# 缺失 cryptography 库时不退化到明文落盘：_HAS_CRYPTO=False 时 save_auth 拒绝写入
+# CXDA_USER_KEY，避免任何“明文写文件”的代码路径。
 try:
     import cred_crypto
     _HAS_CRYPTO = True
@@ -45,9 +47,24 @@ REQUEST_CHANNEL = "CAXEN"
 
 # ── CLI 缓存封装 ──────────────────────────────────────────────────────
 
+def _safe_env_path(name: str) -> str:
+    """读取并校验环境变量取值（缓解风险2：环境变量 RCE）。
+
+    仅允许常规可执行/路径字符，拒绝 shell 元字符（; | & $ ` > 等）与空字节，
+    杜绝“裸 env → subprocess”模式。非法值视为未设置，回退默认值。
+    """
+    value = os.environ.get(name, "")
+    if not value:
+        return ""
+    if any(ch in value for ch in (";", "|", "&", "$", "`", ">", "<", "\n", "\r", "\0")):
+        # 含 shell 元字符，拒绝使用，回退默认值
+        return ""
+    return value
+
+
 def _get_cli_path() -> Path:
     """获取 cxda_cache_cli.py 路径（本地优先）"""
-    env_path = os.environ.get("CXDA_CACHE_CLI_PATH")
+    env_path = _safe_env_path("CXDA_CACHE_CLI_PATH")
     if env_path:
         return Path(env_path)
     return Path(__file__).parent / "cxda_cache_cli.py"
@@ -55,7 +72,7 @@ def _get_cli_path() -> Path:
 
 def _get_python_exe() -> str:
     """获取 Python 执行路径"""
-    env_python = os.environ.get("CXDA_CACHE_PYTHON")
+    env_python = _safe_env_path("CXDA_CACHE_PYTHON")
     if env_python:
         return env_python
     return sys.executable
@@ -70,8 +87,8 @@ def _get_workspace() -> str:
     2. CLAUDE_WORKSPACE 环境变量
     3. 默认 ~/.cxda-cache
     """
-    workspace = os.environ.get("CXDA_CACHE_WORKSPACE") \
-        or os.environ.get("CLAUDE_WORKSPACE") \
+    workspace = _safe_env_path("CXDA_CACHE_WORKSPACE") \
+        or _safe_env_path("CLAUDE_WORKSPACE") \
         or str(Path.home() / ".cxda-cache")
 
     Path(workspace).mkdir(parents=True, exist_ok=True)
@@ -152,9 +169,13 @@ def check_terms_accepted() -> Tuple[bool, dict]:
 def save_auth(data: dict):
     """保存认证数据到缓存（合并更新）。
 
-    CXDA_USER_KEY 落盘前统一加密（缓解风险2：明文存储），所有调用方无需各自处理。
+    CXDA_USER_KEY 落盘前统一加密（缓解风险3：明文存储），所有调用方无需各自处理。
+    安全：未启用加密（_HAS_CRYPTO=False）时，若数据含 CXDA_USER_KEY 则拒绝写入，
+    杜绝明文落盘的代码路径。
     """
-    if _HAS_CRYPTO and isinstance(data, dict) and data.get("CXDA_USER_KEY"):
+    if isinstance(data, dict) and data.get("CXDA_USER_KEY"):
+        if not _HAS_CRYPTO:
+            raise RuntimeError("凭证加密模块不可用，拒绝以明文存储 CXDA_USER_KEY")
         key = data["CXDA_USER_KEY"]
         if not cred_crypto.is_encrypted(key):
             data = {**data, "CXDA_USER_KEY": cred_crypto.encrypt(key)}
@@ -250,6 +271,7 @@ def get_user_key() -> str:
     if not stored:
         return ""
     if not _HAS_CRYPTO:
+        # 加密模块不可用：缓存中只可能是历史明文，原样返回（仅读取，不涉及写入）
         return stored
     plaintext, needs_migration = cred_crypto.decrypt(stored)
     if needs_migration and plaintext:

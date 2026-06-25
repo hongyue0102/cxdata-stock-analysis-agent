@@ -9,8 +9,8 @@ CXDA Skill 授权模块
   python auth.py terms-check                      # 检查协议接受状态
   python auth.py terms-accept                     # 接受服务协议
   python auth.py terms-decline                    # 拒绝服务协议
-  python auth.py send-code --phone 13812345678    # 发送验证码
-  python auth.py verify --phone 13812345678 --code 123456  # 验证码校验
+  echo '{"phone":"13812345678"}' | python auth.py send-code        # 发送验证码
+  echo '{"phone":"13812345678","code":"123456"}' | python auth.py verify  # 验证码校验
   python auth.py status                           # 查看认证状态
 """
 
@@ -59,6 +59,48 @@ def _mask_phone(phone: str) -> str:
 def _safe_net_error(e: Exception) -> str:
     """网络异常脱敏（缓解异常消息泄露 url 含手机号/验证码）。只返回异常类型名。"""
     return type(e).__name__
+
+
+_STDIN_CACHE = {"raw": None}
+
+
+def _load_stdin_once() -> str:
+    """一次性读取并缓存整个 stdin（避免多次 read() 耗尽流）。"""
+    if _STDIN_CACHE["raw"] is None:
+        if sys.stdin.isatty():
+            _STDIN_CACHE["raw"] = ""
+        else:
+            _STDIN_CACHE["raw"] = sys.stdin.read().strip()
+    return _STDIN_CACHE["raw"]
+
+
+def _read_secret_from_stdin(field: str) -> str:
+    """从 stdin 读取敏感字段（phone/code），避免命令行参数暴露在 ps aux 进程列表（缓解风险1）。
+
+    约定：stdin 传入单行 JSON，如 {"phone":"13812345678"} 或 {"phone":"...","code":"123456"}。
+    调用示例：echo '{"phone":"13812345678"}' | python auth.py send-code
+    """
+    raw = _load_stdin_once()
+    if not raw:
+        # 非管道环境（直接运行）：交互式提示输入，仍不通过命令行参数暴露
+        if sys.stdin.isatty():
+            try:
+                return input("请输入{}：".format(field)).strip()
+            except EOFError:
+                return ""
+        return ""
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return str(data.get(field, "")).strip()
+        # JSON 解析成功但非 dict（纯数字/字符串裸值）：仅作 phone 单字段兜底
+        if field == "phone":
+            return str(data).strip()
+    except (json.JSONDecodeError, ValueError):
+        # 非 JSON 文本：仅作 phone 单字段兜底（send-code 可裸传手机号）
+        if field == "phone":
+            return raw
+    return ""
 
 
 # ── 命令：terms-check ─────────────────────────────────────────────────
@@ -111,19 +153,31 @@ def cmd_terms_decline():
 
 # ── 命令：send-code ──────────────────────────────────────────────────
 
-def cmd_send_code(phone: str):
+def cmd_send_code():
     """
     发送验证码
 
     流程：
-    1. 调用后端 api_getVerify 接口发送短信验证码
-    2. 原样返回后端 AjaxResult：code/msg/data
+    1. 从 stdin 读取手机号（不通过命令行参数，避免暴露在进程列表，缓解风险1）
+    2. 调用后端 api_getVerify 接口发送短信验证码
+    3. 原样返回后端 AjaxResult：code/msg/data
+
+    调用：echo '{"phone":"13812345678"}' | python auth.py send-code
     """
     accepted, error_response = check_terms_accepted()
     if not accepted:
         print(json.dumps(error_response, ensure_ascii=False))
         return
-    
+
+    phone = _read_secret_from_stdin("phone")
+    if not phone:
+        print(json.dumps({
+            "code": "10400",
+            "msg": "缺少手机号，请通过 stdin 传入 JSON，如：echo '{\"phone\":\"13812345678\"}' | python auth.py send-code",
+            "data": "",
+        }, ensure_ascii=False))
+        return
+
     try:
         import requests
 
@@ -149,20 +203,33 @@ def cmd_send_code(phone: str):
 
 # ── 命令：verify ─────────────────────────────────────────────────────
 
-def cmd_verify(phone: str, code: str):
+def cmd_verify():
     """
     验证验证码并获取 CXDA_USER_KEY
 
     流程：
-    1. 调用后端 api_verifyLogin 接口验证
-    2. code=10000 时将 data 中的 userKey 写入缓存
-    3. 原样返回后端 AjaxResult：code/msg/data
+    1. 从 stdin 读取手机号+验证码（不通过命令行参数，避免暴露在进程列表，缓解风险1）
+    2. 调用后端 api_verifyLogin 接口验证
+    3. code=10000 时将 data 中的 userKey 写入缓存
+    4. 原样返回后端 AjaxResult：code/msg/data
+
+    调用：echo '{"phone":"13812345678","code":"123456"}' | python auth.py verify
     """
     accepted, error_response = check_terms_accepted()
     if not accepted:
         print(json.dumps(error_response, ensure_ascii=False))
         return
-    
+
+    phone = _read_secret_from_stdin("phone")
+    code = _read_secret_from_stdin("code")
+    if not phone or not code:
+        print(json.dumps({
+            "code": "10400",
+            "msg": "缺少手机号或验证码，请通过 stdin 传入 JSON，如：echo '{\"phone\":\"13812345678\",\"code\":\"123456\"}' | python auth.py verify",
+            "data": "",
+        }, ensure_ascii=False))
+        return
+
     phone_masked = _mask_phone(phone)
 
     try:
@@ -270,14 +337,16 @@ def main():
     标记用户拒绝服务协议。同时清除本地 CXDA_USER_KEY、authtoken、authtoken_expire。
     拒绝后无法使用任何功能。
 
-  send-code --phone <手机号>
+  send-code
     向用户手机号发送短信验证码。
+    手机号通过 stdin（JSON）传入，如：echo '{"phone":"13812345678"}' | python auth.py send-code
     手机号校验由后端执行。
     验证码有效期5分钟。
     成功后提示用户查看短信并告知验证码。
 
-  verify --phone <手机号> --code <验证码>
+  verify
     验证短信验证码，验证成功后自动将 CXDA_USER_KEY 写入本地缓存。
+    手机号与验证码通过 stdin（JSON）传入，如：echo '{"phone":"...","code":"123456"}' | python auth.py verify
     验证码校验由后端执行。
     成功后所有 CXDA Skill 共享此认证状态，无需重复认证。
 
@@ -349,19 +418,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例：
-  python auth.py send-code --phone 13812345678
-
-输出 JSON 格式：
-  成功 → {"code": "10000", "msg": "验证码发送成功,请用手机号：13812345678查收验证码", "data": ""}
-  失败 → {"code": "10500", "msg": "后端返回的失败原因", "data": ""}
+  echo '{"phone":"13812345678"}' | python auth.py send-code
 
 说明：
+  - 手机号通过 stdin（JSON）传入，不通过命令行参数（避免暴露在进程列表，风险1）
   - 手机号格式与频率限制由后端校验
   - 验证码有效期5分钟
   - 成功后告知用户查看短信，等待用户告知验证码
         """
     )
-    p_sms.add_argument("--phone", required=True, help="手机号（由后端校验）")
 
     # verify
     p_verify = subparsers.add_parser(
@@ -371,20 +436,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例：
-  python auth.py verify --phone 13812345678 --code 123456
-
-输出 JSON 格式：
-  成功 → {"code": "10000", "msg": "登录成功返回userKey", "data": "xxx"}
-  失败 → {"code": "10500", "msg": "后端返回的失败原因", "data": ""}
+  echo '{"phone":"13812345678","code":"123456"}' | python auth.py verify
 
 说明：
+  - 手机号与验证码通过 stdin（JSON）传入，不通过命令行参数（避免暴露在进程列表，风险1）
   - 验证码格式和有效性由后端校验
   - 验证成功后 data 中的 CXDA_USER_KEY 自动写入缓存，所有 CXDA Skill 共享
   - 验证码错误或过期时可重新发送（send-code）
         """
     )
-    p_verify.add_argument("--phone", required=True, help="手机号（由后端校验）")
-    p_verify.add_argument("--code", required=True, help="短信验证码（由后端校验）")
 
     # status
     subparsers.add_parser(
@@ -414,9 +474,9 @@ def main():
     elif args.command == "terms-decline":
         cmd_terms_decline()
     elif args.command == "send-code":
-        cmd_send_code(args.phone)
+        cmd_send_code()
     elif args.command == "verify":
-        cmd_verify(args.phone, args.code)
+        cmd_verify()
     elif args.command == "status":
         cmd_status()
 
