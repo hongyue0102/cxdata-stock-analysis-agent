@@ -91,6 +91,10 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-27 0627 预演补漏：CXDA_CACHE_PYTHON 文件名校验
+
+0626 改完后做变体自测，主动发现 `CXDA_CACHE_PYTHON` 仍能指向任意可执行文件（`/tmp/evil.py`）。同步主线：`_safe_env_executable` 新增 `name_pattern`，`_get_python_exe` 要求文件名匹配 `^python(\d+(\.\d+)*)?$`——合法 python 放行，`evil.py`/`sh`/`bash` 拒绝。
+
 ### 2026-06-26 安全扫描 4 条风险修复 + 同步主线变体根治
 
 本轮针对扫描器报的变体绕过根治，并同步主线 agent 的修复：
