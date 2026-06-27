@@ -181,15 +181,17 @@ def cmd_send_code():
     try:
         import requests
 
-        params = {"phone": phone}
+        # 手机号放 POST form body，不进 query string，避免被 Web 服务器/代理日志记录（缓解风险）
+        form = {"phone": phone}
         if REQUEST_CHANNEL:
-            params["requestChannel"] = REQUEST_CHANNEL
+            form["requestChannel"] = REQUEST_CHANNEL
 
-        resp = requests.get(
+        resp = requests.post(
             f"{BASE_URL}/mall/api_getVerify.htm",
-            params=params,
+            data=form,
             headers=HEADERS,
-            proxies=PROXIES
+            proxies=PROXIES,
+            timeout=30,
         )
         resp_data = resp.json()
         print(json.dumps(resp_data, ensure_ascii=False))
@@ -235,15 +237,17 @@ def cmd_verify():
     try:
         import requests
 
-        params = {"phone": phone, "verifyCode": code}
+        # 手机号+验证码放 POST form body，不进 query string，避免被日志记录（缓解风险）
+        form = {"phone": phone, "verifyCode": code}
         if REQUEST_CHANNEL:
-            params["requestChannel"] = REQUEST_CHANNEL
+            form["requestChannel"] = REQUEST_CHANNEL
 
-        resp = requests.get(
+        resp = requests.post(
             f"{BASE_URL}/mall/api_verifyLogin.htm",
-            params=params,
+            data=form,
             headers=HEADERS,
-            proxies=PROXIES
+            proxies=PROXIES,
+            timeout=30,
         )
         resp_data = resp.json()
 

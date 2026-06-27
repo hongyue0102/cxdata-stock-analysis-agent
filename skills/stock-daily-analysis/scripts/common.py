@@ -44,31 +44,59 @@ REQUEST_CHANNEL = "CAXEN"
 # ── CLI 缓存封装 ──────────────────────────────────────────────────────
 
 def _safe_env_path(name: str) -> str:
-    """读取并校验环境变量取值（缓解风险2：环境变量 RCE）。
+    """读取并校验环境变量取值（缓解环境变量 RCE）。
 
-    仅允许常规可执行/路径字符，拒绝 shell 元字符（; | & $ ` > 等）与空字节，
-    杜绝“裸 env → subprocess”模式。非法值视为未设置，回退默认值。
+    拒绝 shell 元字符（; | & $ ` > < 换行等）、空字节，以及路径遍历序列（../）。
+    非法值视为未设置，回退默认值。
     """
     value = os.environ.get(name, "")
     if not value:
         return ""
     if any(ch in value for ch in (";", "|", "&", "$", "`", ">", "<", "\n", "\r", "\0")):
-        # 含 shell 元字符，拒绝使用，回退默认值
+        return ""
+    # 拒绝路径遍历：含 .. 的取值一律拒绝（缓解 env RCE：绝对路径/相对逃逸指向恶意可执行文件）
+    if ".." in value:
         return ""
     return value
 
 
+def _safe_env_executable(name: str, trusted_dir: Path = None, trusted_name: str = None) -> str:
+    """校验指向可执行文件的环境变量（缓解 env RCE）。
+
+    在 _safe_env_path 基础上额外要求：
+    - 必须是绝对路径；
+    - 若指定 trusted_dir/trusted_name，则路径必须位于 trusted_dir 内且文件名匹配。
+    不满足则视为未设置，回退默认值。
+    """
+    value = _safe_env_path(name)
+    if not value:
+        return ""
+    p = Path(value)
+    if not p.is_absolute():
+        return ""
+    if trusted_dir is not None:
+        try:
+            resolved = p.resolve()
+            resolved.relative_to(trusted_dir.resolve())
+        except (ValueError, OSError):
+            return ""
+        if trusted_name is not None and resolved.name != trusted_name:
+            return ""
+    return value
+
+
 def _get_cli_path() -> Path:
-    """获取 cxda_cache_cli.py 路径（本地优先）"""
-    env_path = _safe_env_path("CXDA_CACHE_CLI_PATH")
+    """获取 cxda_cache_cli.py 路径（本地优先，限定在 scripts 目录内）"""
+    scripts_dir = Path(__file__).parent
+    env_path = _safe_env_executable("CXDA_CACHE_CLI_PATH", trusted_dir=scripts_dir, trusted_name="cxda_cache_cli.py")
     if env_path:
         return Path(env_path)
-    return Path(__file__).parent / "cxda_cache_cli.py"
+    return scripts_dir / "cxda_cache_cli.py"
 
 
 def _get_python_exe() -> str:
-    """获取 Python 执行路径"""
-    env_python = _safe_env_path("CXDA_CACHE_PYTHON")
+    """获取 Python 执行路径（必须绝对路径，拒绝 ../）"""
+    env_python = _safe_env_executable("CXDA_CACHE_PYTHON")
     if env_python:
         return env_python
     return sys.executable
@@ -222,9 +250,9 @@ def get_shared_json(filename: str) -> dict:
 
 
 def save_shared_json(filename: str, data: dict):
-    """写入公域 JSON 文件（覆盖写）"""
+    """写入公域 JSON 文件（覆盖写）。内容经 stdin 传，不进命令行（避免进程列表暴露）。"""
     filename = _validate_shared_filename(filename)
-    _cli_call("shared", "write", [filename, "--content", json.dumps(data, ensure_ascii=False)])
+    _cli_call("shared", "write", [filename], stdin_input=json.dumps(data, ensure_ascii=False))
 
 
 def get_shared_text(filename: str) -> str:
@@ -250,15 +278,15 @@ def get_shared_text(filename: str) -> str:
 
 
 def save_shared_text(filename: str, content: str):
-    """写入公域文本文件（覆盖写）"""
+    """写入公域文本文件（覆盖写）。内容经 stdin 传，不进命令行。"""
     filename = _validate_shared_filename(filename)
-    _cli_call("shared", "write", [filename, "--content", content])
+    _cli_call("shared", "write", [filename], stdin_input=content)
 
 
 def append_shared_text(filename: str, content: str):
-    """追加写入公域文本文件。"""
+    """追加写入公域文本文件。内容经 stdin 传，不进命令行。"""
     filename = _validate_shared_filename(filename)
-    _cli_call("shared", "append", [filename, "--content", content])
+    _cli_call("shared", "append", [filename], stdin_input=content)
 
 
 # ── CXDA_USER_KEY 管理 ───────────────────────────────────────────────
@@ -403,16 +431,19 @@ def http_get(url: str, params: dict = None, include_channel: bool = True) -> dic
     必须以 BASE_URL 的 path 前缀开头（/cxda/），拒绝跨 path 访问（如 /cxdaevil/）。
     """
     import requests
-    from urllib.parse import urlparse
+    from urllib.parse import urlparse, unquote
+    import posixpath
 
-    # SSRF 防护：scheme/host/path 三重校验，防止绕过到同域其他 path
+    # SSRF 防护：scheme/host/path 三重校验 + path 规范化，防止 /cxda/../admin 绕过（缓解 SSRF）
     base = urlparse(BASE_URL)
     parsed = urlparse(url) if isinstance(url, str) else None
+    # 先解码 URL 编码（防 %2e%2e 绕过），再规范化 path，消除 ../ 、// 等逃逸序列
+    norm_path = posixpath.normpath(unquote(parsed.path)) if parsed else ""
     if (
         not parsed
         or parsed.scheme != base.scheme
         or parsed.netloc != base.netloc
-        or not parsed.path.startswith(base.path + "/")
+        or not norm_path.startswith(base.path + "/")
     ):
         # 脱敏：不回显完整 url（可能含敏感参数，缓解风险7）
         raise ValueError("拒绝非白名单 URL 请求（仅允许官方 cxdata 接口路径）")

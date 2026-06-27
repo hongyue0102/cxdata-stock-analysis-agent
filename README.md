@@ -91,6 +91,26 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-26 安全扫描 4 条风险修复 + 同步主线变体根治
+
+本轮针对扫描器报的变体绕过根治，并同步主线 agent 的修复：
+
+| # | 风险 | 修复 |
+|---|---|---|
+| 1 | 私域 write 默认权限 0o644 | `cxda_cache_cli.py` 私域 write 改 `os.open`+0o600+`O_NOFOLLOW`（同时缓解 TOCTOU 符号链接替换） |
+| 2 | shared/private write content 经命令行 | `cxda_cache_cli.py` content 改 stdin 读取；`common.py` 调用改 stdin_input |
+| 3 | TOCTOU 路径校验与文件操作分离 | 私域 write 用 `O_NOFOLLOW` 拒符号链接；`_get_file_path` resolve 校验保留 |
+| 4 | SSRF 未规范化 path | `http_get` 加 `unquote`+`posixpath.normpath`，防 `/cxda/../admin` 和 `%2e%2e` 绕过 |
+
+**同步主线**（主线反馈报、本 agent 同源）：
+- `auth.py` send-code/verify 改 POST form data（phone/code 不进 query string，已验证后端支持 POST）
+- `common.py` `_safe_env_executable`：拒 `..`、绝对路径校验、CLI_PATH 限定 scripts 目录
+- `query.py` parse_params 黑名单全小写 + `k.lower()` 归一化，防大小写绕过
+
+**改动文件**：`auth.py`、`common.py`、`query.py`、`cxda_cache_cli.py`
+
+**验证**：语法通过；parse_params 5 变体拦截、env 拒 ../、SSRF 拒 ../admin、私域 write 0o600、符号链接 TOCTOU 拒绝、content stdin 读写往返 全部通过
+
 ### 2026-06-25 补漏：http_get 同步主线（SSRF host+path 双校验 + 异常脱敏，风险 6/7）
 
 最终核查发现 stock 的 `http_get` 仍是老版本（仅 `startswith(BASE_URL)`，缺风险 6 的 SSRF path 校验和风险 7 的异常脱敏）。stock 反馈未单独报这两条，但代码同源存在隐患，本次同步主线方案：

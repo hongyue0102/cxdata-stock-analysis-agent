@@ -299,19 +299,32 @@ class CacheManager:
 
     def write(self, skill_name: str, filename: str, content: str,
               subdir: str = "data", append: bool = False) -> dict:
-        """写入私域文件"""
+        """写入私域文件。
+
+        安全（缓解默认权限 0o644 与 TOCTOU）：
+        - 以 0o600 权限创建/写，避免同机其他用户读取；
+        - O_NOFOLLOW：目标若是符号链接则直接失败，消除 check 与 use 之间的符号链接替换窗口。
+        """
         file_path = self._get_file_path(skill_name, filename, subdir)
-        mode = "a" if append else "w"
 
         try:
-            with open(file_path, mode, encoding="utf-8") as f:
+            flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+            # O_NOFOLLOW：拒绝符号链接，缓解 TOCTOU（攻击者在 check 后把文件换成 symlink）
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            if hasattr(os, "O_BINARY"):
+                flags |= os.O_BINARY
+            fd = os.open(file_path, flags, 0o600)
+            try:
                 if _HAS_FCNTL:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    fcntl.flock(fd, fcntl.LOCK_EX)
                 try:
-                    f.write(content)
+                    os.write(fd, content.encode("utf-8"))
                 finally:
                     if _HAS_FCNTL:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
             return {
                 "success": True,
@@ -405,6 +418,13 @@ class CacheManager:
 
 # ── CLI 接口 ──────────────────────────────────────────────────────────
 
+def _read_stdin() -> str:
+    """从 stdin 读取内容（避免敏感数据出现在进程列表的命令行参数中）。"""
+    if sys.stdin.isatty():
+        return ""
+    return sys.stdin.read()
+
+
 def main():
     # Windows 编码修复
     if sys.platform == "win32":
@@ -458,11 +478,11 @@ def main():
 
     shared_write = shared_subparsers.add_parser("write", help="写入公域文件")
     shared_write.add_argument("file", help="文件名")
-    shared_write.add_argument("--content", "-c", required=True, help="文件内容")
+    shared_write.add_argument("--content", "-c", help="文件内容（缺省时从stdin读取）")
 
     shared_append = shared_subparsers.add_parser("append", help="追加公域文件")
     shared_append.add_argument("file", help="文件名")
-    shared_append.add_argument("--content", "-c", required=True, help="文件内容")
+    shared_append.add_argument("--content", "-c", help="文件内容（缺省时从stdin读取）")
 
     shared_delete = shared_subparsers.add_parser("delete", help="删除公域文件")
     shared_delete.add_argument("file", help="文件名")
@@ -480,7 +500,7 @@ def main():
     write_parser = subparsers.add_parser("write", help="写入私域文件")
     write_parser.add_argument("skill", help="Skill名称")
     write_parser.add_argument("file", help="文件名")
-    write_parser.add_argument("--content", "-c", required=True, help="文件内容")
+    write_parser.add_argument("--content", "-c", help="文件内容（缺省时从stdin读取）")
     write_parser.add_argument("--type", "-t", default="data",
                               choices=["data", "cache", "config"],
                               help="子目录类型")
@@ -536,9 +556,11 @@ def main():
                 print(result["content"])
                 return
         elif args.shared_cmd == "write":
-            result = manager.shared_write(args.file, args.content)
+            content = args.content if args.content is not None else _read_stdin()
+            result = manager.shared_write(args.file, content)
         elif args.shared_cmd == "append":
-            result = manager.shared_append(args.file, args.content)
+            content = args.content if args.content is not None else _read_stdin()
+            result = manager.shared_append(args.file, content)
         elif args.shared_cmd == "delete":
             result = manager.shared_delete(args.file)
         elif args.shared_cmd == "list":
@@ -554,7 +576,8 @@ def main():
             return
 
     elif args.command == "write":
-        result = manager.write(args.skill, args.file, args.content, args.type, args.append)
+        content = args.content if args.content is not None else _read_stdin()
+        result = manager.write(args.skill, args.file, content, args.type, args.append)
 
     elif args.command == "info":
         result = manager.info()

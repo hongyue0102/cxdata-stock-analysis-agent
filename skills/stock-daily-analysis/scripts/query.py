@@ -65,8 +65,9 @@ _DISPLAY_TZ = timezone(timedelta(hours=8))
 _PAGE_SIZE_CACHE = None
 
 
-# 脚本内部管理的保留字段，禁止用户通过 key=value 覆盖（缓解风险4：authtoken 越权覆盖）
-_FORBIDDEN_PARAM_KEYS = {"authtoken", "userKey", "requestChannel"}
+# 脚本内部管理的保留字段，禁止用户通过 key=value 覆盖（缓解风险4/5：authtoken 越权覆盖）
+# 全部小写存储，比较时 key 归一化，防止大小写变体绕过
+_FORBIDDEN_PARAM_KEYS = {"authtoken", "userkey", "requestchannel"}
 
 
 def parse_params(args):
@@ -79,7 +80,8 @@ def parse_params(args):
         if '=' in arg:
             k, v = arg.split('=', 1)
             k = k.strip()
-            if k in _FORBIDDEN_PARAM_KEYS:
+            # 大小写归一化比较，防止 Authtoken/USERKEY 等变体绕过（缓解水平越权）
+            if k.lower() in _FORBIDDEN_PARAM_KEYS:
                 raise ValueError("禁止覆盖保留参数（脚本自动管理）: {}".format(k))
             params[k] = v.strip()
     return params
