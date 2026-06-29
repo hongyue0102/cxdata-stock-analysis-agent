@@ -91,6 +91,10 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-29 硬编码凭证：cred_crypto 密钥派生退化检测（同步主线）
+
+火山报主线 `cred_crypto._derive_key()` 在 host/user 全空（容器环境）时退化成固定弱密钥。本 agent cred_crypto.py 与主线同源（差异 0），存在同样问题，同步修复：host/user 均空时拒绝生成密钥。三 agent 同步。
+
 ### 2026-06-29 路径遍历补漏：list_files / _get_skill_path 的 skill_name 校验（同步主线）
 
 火山扫描报 `cxda_cache_cli.py` 的 `list_files()`/`_get_skill_path()` 未校验 skill_name。此前只加固了 `_get_file_path`，没覆盖同样接收 skill_name 的这两个方法。同步主线修复：

@@ -32,10 +32,17 @@ def _derive_key() -> bytes:
     """由本机特征派生 Fernet 密钥（base64 编码的 32 字节）。"""
     # 机器特征：主机名 + 登录用户名（getpass 在无 tty 环境可能抛错，兜底用环境变量）
     try:
-        user = getpass.getuser() or os.environ.get("USER", "")
+        user = getpass.getuser() or os.environ.get("USER", "") or os.environ.get("USERNAME", "")
     except Exception:
-        user = os.environ.get("USER", os.environ.get("USERNAME", ""))
+        user = os.environ.get("USER", "") or os.environ.get("USERNAME", "")
     host = socket.gethostname() or ""
+    # 退化检测：host 与 user 均空时 material 会退化成固定 b"|"，密钥可预测，
+    # 攻击者可解密所有凭证。此时拒绝派生，强制环境正确配置 hostname/user。
+    if not host and not user:
+        raise RuntimeError(
+            "无法获取机器特征（hostname 与用户名均为空），拒绝生成可预测的弱密钥。"
+            "请配置 HOSTNAME/USER 环境变量后重试。"
+        )
     material = f"{host}|{user}".encode("utf-8")
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
