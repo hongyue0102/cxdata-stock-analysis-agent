@@ -91,6 +91,15 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-06-29 路径遍历补漏：list_files / _get_skill_path 的 skill_name 校验（同步主线）
+
+火山扫描报 `cxda_cache_cli.py` 的 `list_files()`/`_get_skill_path()` 未校验 skill_name。此前只加固了 `_get_file_path`，没覆盖同样接收 skill_name 的这两个方法。同步主线修复：
+
+- 新增 `_SAFE_NAME_RE` + `_validate_skill_name()`，`_get_skill_path`/`list_files`/`_get_file_path` 三入口统一校验
+- `list_files` 的 subdir 分支改直接拼路径（列表不应 mkdir）
+
+**验证**：语法通过；8 个路径遍历变体全拦截，合法名不误伤
+
 ### 2026-06-27 0627 预演补漏：CXDA_CACHE_PYTHON 文件名校验
 
 0626 改完后做变体自测，主动发现 `CXDA_CACHE_PYTHON` 仍能指向任意可执行文件（`/tmp/evil.py`）。同步主线：`_safe_env_executable` 新增 `name_pattern`，`_get_python_exe` 要求文件名匹配 `^python(\d+(\.\d+)*)?$`——合法 python 放行，`evil.py`/`sh`/`bash` 拒绝。

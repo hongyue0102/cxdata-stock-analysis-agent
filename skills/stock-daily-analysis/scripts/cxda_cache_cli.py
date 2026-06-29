@@ -266,8 +266,21 @@ class CacheManager:
         "config": "配置文件",
     }
 
+    # skill_name / filename 白名单：仅允许字母数字下划线连字符点，
+    # 从源头拒绝 ../ 、/ 、URL编码(%2f) 等路径分隔与逃逸字符（缓解路径遍历）
+    _SAFE_NAME_RE = __import__("re").compile(r"^[A-Za-z0-9_.\-]+$")
+
+    @classmethod
+    def _validate_skill_name(cls, skill_name: str) -> str:
+        """校验 skill_name，拦截路径遍历（../）与注入字符。所有接收 skill_name 的入口统一调用。"""
+        if not isinstance(skill_name, str) or not cls._SAFE_NAME_RE.match(skill_name) or ".." in skill_name:
+            raise ValueError(f"非法 skill 名称（拒绝路径遍历）: {skill_name!r}")
+        return skill_name
+
+
     def _get_skill_path(self, skill_name: str, subdir: str = "data") -> Path:
-        """获取 Skill 目录路径"""
+        """获取 Skill 目录路径（含 skill_name 路径遍历防护）。"""
+        self._validate_skill_name(skill_name)
         if subdir not in self.SUBDIR_TYPES:
             raise ValueError(f"未知子目录类型: {subdir}。可用: {list(self.SUBDIR_TYPES.keys())}")
         skill_path = self.workspace / skill_name / subdir
@@ -282,11 +295,9 @@ class CacheManager:
            从源头拒绝 ../ 、/ 、URL编码(%2f) 等路径分隔与逃逸字符；
         2. resolve 校验：目标路径 resolve 后必须仍位于 skill 子目录内。
         """
-        # 入口白名单：禁止任何路径分隔符与逃逸字符
-        _SAFE_NAME_RE = __import__("re").compile(r"^[A-Za-z0-9_.\-]+$")
-        if not isinstance(skill_name, str) or not _SAFE_NAME_RE.match(skill_name) or ".." in skill_name:
-            raise ValueError(f"非法 skill 名称（拒绝路径遍历）: {skill_name!r}")
-        if not isinstance(filename, str) or not _SAFE_NAME_RE.match(filename) or ".." in filename:
+        # 入口白名单：skill_name / filename 只允许安全字符（复用 _validate_skill_name）
+        self._validate_skill_name(skill_name)
+        if not isinstance(filename, str) or not self._SAFE_NAME_RE.match(filename) or ".." in filename:
             raise ValueError(f"非法 file 名称（拒绝路径遍历）: {filename!r}")
 
         skill_path = self._get_skill_path(skill_name, subdir)
@@ -374,9 +385,12 @@ class CacheManager:
             return {"success": False, "error": str(e)}
 
     def list_files(self, skill_name: str, subdir: str = None) -> dict:
-        """列出文件"""
+        """列出文件（含 skill_name 路径遍历防护）。"""
+        self._validate_skill_name(skill_name)
         if subdir:
-            paths = [self._get_skill_path(skill_name, subdir)]
+            if subdir not in self.SUBDIR_TYPES:
+                raise ValueError(f"未知子目录类型: {subdir}。可用: {list(self.SUBDIR_TYPES.keys())}")
+            paths = [self.workspace / skill_name / subdir]
         else:
             skill_root = self.workspace / skill_name
             paths = [skill_root / d for d in self.SUBDIR_TYPES.keys()]
