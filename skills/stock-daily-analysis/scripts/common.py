@@ -220,10 +220,19 @@ def save_auth(data: dict):
     CXDA_USER_KEY 落盘前统一加密（缓解风险3：明文存储），所有调用方无需各自处理。
     安全：数据通过 stdin 传给 CLI，不作为命令行参数，避免出现在进程列表（缓解风险2）。
     cred_crypto 为硬依赖（顶部 import），不存在无加密分支。
+
+    加密判定改用"尝试解密+前缀+解密成功"三重验证（替代 is_encrypted 纯前缀检查），
+    防止后端返回的明文 key 恰好以 "ENCv1:" 开头时被误判为已加密而明文落盘（火山风险1）。
+    仅当 key 有 EN Cv1: 前缀且 decrypt 返回非空明文时，才视为已加密形态跳过。
     """
     if isinstance(data, dict) and data.get("CXDA_USER_KEY"):
         key = data["CXDA_USER_KEY"]
-        if not cred_crypto.is_encrypted(key):
+        already_encrypted = False
+        if key.startswith(cred_crypto._ENC_PREFIX):
+            decrypted, _ = cred_crypto.decrypt(key)
+            if decrypted:
+                already_encrypted = True
+        if not already_encrypted:
             data = {**data, "CXDA_USER_KEY": cred_crypto.encrypt(key)}
     _cli_call("auth", "set", stdin_input=json.dumps(data, ensure_ascii=False))
 

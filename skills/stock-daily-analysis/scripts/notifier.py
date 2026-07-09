@@ -5,10 +5,24 @@
 """
 
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+_CONTROL_RE = re.compile(r"[\r\n\t\x00-\x1f\x7f]")
+
+
+def _sanitize(value) -> str:
+    """净化用户/API 可控字段：剥离控制字符并转义 HTML 特殊字符，防止 XSS。"""
+    if value is None:
+        return ""
+    cleaned = _CONTROL_RE.sub(" ", str(value))
+    return (cleaned.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace('"', "&quot;"))
 
 
 @dataclass
@@ -47,14 +61,14 @@ def format_analysis_report(report: AnalysisReport) -> str:
     """
     lines = [
         f"{'='*50}",
-        f"📊 {report.name} ({report.code}) 分析报告",
+        f"📊 {_sanitize(report.name)} ({_sanitize(report.code)}) 分析报告",
         f"{'='*50}",
         "",
         f"【核心结论】",
-        f"  AI结论: {report.operation_advice}",
-        f"  趋势预测: {report.trend_prediction}",
+        f"  AI结论: {_sanitize(report.operation_advice)}",
+        f"  趋势预测: {_sanitize(report.trend_prediction)}",
         f"  情绪评分: {report.sentiment_score}/100",
-        f"  置信度: {report.confidence_level}",
+        f"  置信度: {_sanitize(report.confidence_level)}",
         "",
         f"【技术面分析】",
     ]
@@ -72,16 +86,16 @@ def format_analysis_report(report: AnalysisReport) -> str:
         lines.append(f"  MA20: {tech['ma20']:.2f}")
     
     if 'trend_status' in tech:
-        lines.append(f"  趋势状态: {tech.get('trend_status', 'N/A')}")
+        lines.append(f"  趋势状态: {_sanitize(tech.get('trend_status', 'N/A'))}")
     
     if 'volume_status' in tech:
-        lines.append(f"  量能状态: {tech.get('volume_status', 'N/A')}")
+        lines.append(f"  量能状态: {_sanitize(tech.get('volume_status', 'N/A'))}")
     
     if 'macd_status' in tech:
-        lines.append(f"  MACD: {tech.get('macd_status', 'N/A')}")
+        lines.append(f"  MACD: {_sanitize(tech.get('macd_status', 'N/A'))}")
     
     if 'rsi_status' in tech:
-        lines.append(f"  RSI: {tech.get('rsi_status', 'N/A')}")
+        lines.append(f"  RSI: {_sanitize(tech.get('rsi_status', 'N/A'))}")
     
     lines.append("")
     
@@ -101,19 +115,19 @@ def format_analysis_report(report: AnalysisReport) -> str:
     # 看多理由
     if report.buy_reason:
         lines.append(f"【看多理由】")
-        lines.append(f"  {report.buy_reason}")
+        lines.append(f"  {_sanitize(report.buy_reason)}")
         lines.append("")
     
     # 风险警告
     if report.risk_warning:
         lines.append(f"【风险提示】")
-        lines.append(f"  {report.risk_warning}")
+        lines.append(f"  {_sanitize(report.risk_warning)}")
         lines.append("")
     
     # AI 分析
     if report.ai_analysis:
         lines.append(f"【AI 分析】")
-        lines.append(f"  {report.ai_analysis}")
+        lines.append(f"  {_sanitize(report.ai_analysis)}")
         lines.append("")
     
     lines.append(f"{'='*50}")
@@ -152,9 +166,9 @@ def format_dashboard_report(reports: List[AnalysisReport]) -> str:
     
     for report in reports:
         emoji = "🟢" if report.decision_type == 'buy' else "🟡" if report.decision_type == 'hold' else "🔴"
-        lines.append(f"{emoji} {report.name} ({report.code})")
-        lines.append(f"   结论: {report.operation_advice} | 评分: {report.sentiment_score}/100")
-        lines.append(f"   趋势: {report.trend_prediction}")
+        lines.append(f"{emoji} {_sanitize(report.name)} ({_sanitize(report.code)})")
+        lines.append(f"   结论: {_sanitize(report.operation_advice)} | 评分: {report.sentiment_score}/100")
+        lines.append(f"   趋势: {_sanitize(report.trend_prediction)}")
         
         # 添加关键技术指标
         tech = report.technical_summary
@@ -163,7 +177,7 @@ def format_dashboard_report(reports: List[AnalysisReport]) -> str:
         if 'bias_ma5' in tech:
             key_info.append(f"乖离率: {tech['bias_ma5']:+.1f}%")
         if 'macd_status' in tech:
-            key_info.append(f"MACD: {tech['macd_status']}")
+            key_info.append(f"MACD: {_sanitize(tech['macd_status'])}")
         
         if key_info:
             lines.append(f"   关键指标: {' | '.join(key_info)}")

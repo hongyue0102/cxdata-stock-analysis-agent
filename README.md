@@ -91,6 +91,17 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-07-09 火山安全扫描 2 条风险修复
+
+| # | 风险 | 修复 |
+|---|---|---|
+| 1 | `is_encrypted()` 纯前缀判定导致明文落盘 | `common.py` `save_auth()` 加密判定改用"前缀+解密验证"双重判定：仅当 key 以 `ENCv1:` 开头**且** `decrypt()` 返回非空明文时才视为已加密跳过，否则一律加密。防止后端返回的明文 key 恰好以 `ENCv1:` 开头时被误判为已加密 |
+| 2 | `notifier.py` + `analyzer.py` 报告输出未净化，XSS | `notifier.py` 新增 `_sanitize()` 函数（控制字符清除 + HTML 实体转义），`format_analysis_report` / `format_dashboard_report` 中所有 API 可控字符串字段统一净化；`analyzer.py` `generate_report()` 中 `signal_labels`/`risk_points`/`macd_status`/`rsi_status`/`volume_status`/`volume_trend`/`level_notes` 等字段补调 `_sanitize_for_markdown()` |
+
+**改动文件**：`common.py`、`notifier.py`、`analyzer.py`
+
+**验证**：3 文件语法编译通过；风险1（5 场景：普通明文加密/合法密文跳过/ENCv1 假密文识别/空串/加密还原）+ 风险2（9 场景：script/img/a 标签转义/控制字符清除/中文不误伤/notifier+analyzer 双模块净化）全部通过
+
 ### 2026-06-29 硬编码凭证：cred_crypto 密钥派生退化检测（同步主线）
 
 火山报主线 `cred_crypto._derive_key()` 在 host/user 全空（容器环境）时退化成固定弱密钥。本 agent cred_crypto.py 与主线同源（差异 0），存在同样问题，同步修复：host/user 均空时拒绝生成密钥。三 agent 同步。

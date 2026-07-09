@@ -294,15 +294,16 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     lines.append("")
     lines.append("| 项目 | 结果 |")
     lines.append("|------|------|")
-    lines.append(f"| **AI结论** | {ai_result.get('operation_advice', 'N/A')} |")
+    lines.append(f"| **AI结论** | {_sanitize_for_markdown(ai_result.get('operation_advice', 'N/A'))} |")
     lines.append(f"| **综合评分** | {ai_result.get('sentiment_score', 0)}/100 |")
-    lines.append(f"| **趋势判断** | {ai_result.get('trend_prediction', 'N/A')} |")
-    lines.append(f"| **置信度** | {ai_result.get('confidence_level', 'N/A')} |")
+    lines.append(f"| **趋势判断** | {_sanitize_for_markdown(ai_result.get('trend_prediction', 'N/A'))} |")
+    lines.append(f"| **置信度** | {_sanitize_for_markdown(ai_result.get('confidence_level', 'N/A'))} |")
     lines.append("")
     # 一句话结论：基于 Python 信号拼接的事实型描述（LLM 必须在 Step 3 重写为独立解读）
     operation = ai_result.get('operation_advice', '观望')
     labels = ai_result.get('signal_labels', [])
-    summary = f"{operation}（信号: {', '.join(labels[:3]) if labels else '无'}）"
+    safe_labels = [_sanitize_for_markdown(l) for l in labels[:3]]
+    summary = f"{_sanitize_for_markdown(operation)}（信号: {', '.join(safe_labels) if safe_labels else '无'}）"
     lines.append(f"**一句话结论**: {summary}")
     lines.append("")
     lines.append("---")
@@ -338,7 +339,7 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     if 'ma20' in tech:
         lines.append(f"| MA20 | {_fmt_num(tech['ma20'])} | {_fmt_pct(tech.get('bias_ma20', 0))} |")
     lines.append("")
-    lines.append(f"- **趋势状态**: {tech.get('trend_status', 'N/A')} ({tech.get('ma_alignment', '')})")
+    lines.append(f"- **趋势状态**: {_sanitize_for_markdown(tech.get('trend_status', 'N/A'))} ({_sanitize_for_markdown(tech.get('ma_alignment', ''))})")
     lines.append(f"- **趋势强度**: {tech.get('trend_strength', 0)}/100")
     lines.append("")
 
@@ -351,8 +352,8 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     lines.append(f"| DEA | {_fmt_num(tech.get('macd_dea', 0), 3)} |")
     lines.append(f"| MACD柱 | {_fmt_num(tech.get('macd_bar', 0), 3)} |")
     lines.append("")
-    lines.append(f"- **MACD状态**: {tech.get('macd_status', 'N/A')}")
-    lines.append(f"- **信号**: {tech.get('macd_signal', 'N/A')}")
+    lines.append(f"- **MACD状态**: {_sanitize_for_markdown(tech.get('macd_status', 'N/A'))}")
+    lines.append(f"- **信号**: {_sanitize_for_markdown(tech.get('macd_signal', 'N/A'))}")
     lines.append("")
 
     # RSI
@@ -364,8 +365,8 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     lines.append(f"| RSI(12) | {_fmt_num(tech.get('rsi_12', 0))} |")
     lines.append(f"| RSI(20) | {_fmt_num(tech.get('rsi_20', 0))} |")
     lines.append("")
-    lines.append(f"- **RSI状态**: {tech.get('rsi_status', 'N/A')} (RSI12 = {_fmt_num(tech.get('rsi_12', 0))})")
-    lines.append(f"- **信号**: {tech.get('rsi_signal', 'N/A')}")
+    lines.append(f"- **RSI状态**: {_sanitize_for_markdown(tech.get('rsi_status', 'N/A'))} (RSI12 = {_fmt_num(tech.get('rsi_12', 0))})")
+    lines.append(f"- **信号**: {_sanitize_for_markdown(tech.get('rsi_signal', 'N/A'))}")
     lines.append("")
 
     # 量能
@@ -373,9 +374,9 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     lines.append("")
     lines.append("| 指标 | 数值 |")
     lines.append("|------|------|")
-    lines.append(f"| 量能状态 | {tech.get('volume_status', 'N/A')} |")
+    lines.append(f"| 量能状态 | {_sanitize_for_markdown(tech.get('volume_status', 'N/A'))} |")
     lines.append(f"| 5日量比 | {_fmt_num(tech.get('volume_ratio_5d', 0))} |")
-    lines.append(f"| 量能趋势 | {tech.get('volume_trend', 'N/A')} |")
+    lines.append(f"| 量能趋势 | {_sanitize_for_markdown(tech.get('volume_trend', 'N/A'))} |")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -387,10 +388,10 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     lines.append("")
     lines.append("| 类型 | 价位 | 依据 |")
     lines.append("|------|------|------|")
-    lines.append(f"| 强支撑 | {_fmt_num(key_levels.get('strong_support'))} | {level_notes.get('strong_support', '')} |")
-    lines.append(f"| 短支撑 | {_fmt_num(key_levels.get('short_support'))} | {level_notes.get('short_support', '')} |")
-    lines.append(f"| 第一压力 | {_fmt_num(key_levels.get('first_resistance'))} | {level_notes.get('first_resistance', '')} |")
-    lines.append(f"| 强压力 | {_fmt_num(key_levels.get('strong_resistance'))} | {level_notes.get('strong_resistance', '')} |")
+    lines.append(f"| 强支撑 | {_fmt_num(key_levels.get('strong_support'))} | {_sanitize_for_markdown(level_notes.get('strong_support', ''))} |")
+    lines.append(f"| 短支撑 | {_fmt_num(key_levels.get('short_support'))} | {_sanitize_for_markdown(level_notes.get('short_support', ''))} |")
+    lines.append(f"| 第一压力 | {_fmt_num(key_levels.get('first_resistance'))} | {_sanitize_for_markdown(level_notes.get('first_resistance', ''))} |")
+    lines.append(f"| 强压力 | {_fmt_num(key_levels.get('strong_resistance'))} | {_sanitize_for_markdown(level_notes.get('strong_resistance', ''))} |")
     reasonable = ai_result.get('reasonable_range', ())
     if reasonable and len(reasonable) == 2:
         lines.append("")
@@ -405,7 +406,7 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
         lines.append("## 看多理由")
         lines.append("")
         for label in signal_labels:
-            lines.append(f"- {label}")
+            lines.append(f"- {_sanitize_for_markdown(label)}")
         lines.append("")
 
     # 风险提示（基于 risk_points，LLM 必须全列，不得遗漏）
@@ -414,7 +415,7 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
         lines.append("## 风险提示")
         lines.append("")
         for point in risk_points:
-            lines.append(f"- {point}")
+            lines.append(f"- {_sanitize_for_markdown(point)}")
         lines.append("")
 
     lines.append("---")
