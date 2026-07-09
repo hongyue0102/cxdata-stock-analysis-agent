@@ -28,8 +28,59 @@ _SALT = b"cxda-cred-v1-salt-do-not-change"
 _ENC_PREFIX = "ENCv1:"
 
 
+def _get_machine_id() -> str:
+    """获取机器唯一标识，增加密钥派生材料不可预测性（缓解火山风险3：硬编码凭证）。
+
+    优先级：
+    1. macOS IOPlatformUUID（ioreg）
+    2. Linux /etc/machine-id 或 /var/lib/dbus/machine-id
+    3. Windows MachineGuid 注册表
+    4. 回退空串（仍依赖 hostname+user，与旧版一致）
+    """
+    import subprocess as _sp
+    import platform
+
+    system = platform.system()
+
+    try:
+        if system == "Darwin":
+            result = _sp.run(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                if "IOPlatformUUID" in line:
+                    parts = line.split('"')
+                    if len(parts) >= 4:
+                        return parts[-2].strip()
+        elif system == "Linux":
+            for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+                p = Path(path) if "Path" in dir() else __import__("pathlib").Path(path)
+                if p.exists():
+                    return p.read_text().strip()[:64]
+        elif system == "Windows":
+            result = _sp.run(
+                ["reg", "query",
+                 r"HKLM\SOFTWARE\Microsoft\Cryptography",
+                 "/v", "MachineGuid"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                if "MachineGuid" in line:
+                    return line.split()[-1].strip()
+    except Exception:
+        pass
+
+    return ""
+
+
 def _derive_key() -> bytes:
-    """由本机特征派生 Fernet 密钥（base64 编码的 32 字节）。"""
+    """由本机特征派生 Fernet 密钥（base64 编码的 32 字节）。
+
+    密钥材料 = hostname + username + 机器唯一标识（machine-id），
+    增加 attack surface 门槛——攻击者不仅需要知道 hostname/username，
+    还需要获取 machine-id 才能离线派生密钥（缓解火山风险3：硬编码凭证）。
+    """
     # 机器特征：主机名 + 登录用户名（getpass 在无 tty 环境可能抛错，兜底用环境变量）
     try:
         user = getpass.getuser() or os.environ.get("USER", "") or os.environ.get("USERNAME", "")
@@ -43,7 +94,8 @@ def _derive_key() -> bytes:
             "无法获取机器特征（hostname 与用户名均为空），拒绝生成可预测的弱密钥。"
             "请配置 HOSTNAME/USER 环境变量后重试。"
         )
-    material = f"{host}|{user}".encode("utf-8")
+    machine_id = _get_machine_id()
+    material = f"{host}|{user}|{machine_id}".encode("utf-8")
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,

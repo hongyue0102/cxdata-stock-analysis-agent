@@ -102,6 +102,18 @@ cxdata-stock-analysis-agent/
 
 **验证**：3 文件语法编译通过；风险1（5 场景：普通明文加密/合法密文跳过/ENCv1 假密文识别/空串/加密还原）+ 风险2（9 场景：script/img/a 标签转义/控制字符清除/中文不误伤/notifier+analyzer 双模块净化）全部通过
 
+### 2026-07-09 火山安全扫描 4 条风险修复（同步主线 agent）
+
+| # | 风险 | 修复 |
+|---|---|---|
+| 1 | `_cli_call` 环境变量全量传递导致 RCE | `common.py` `_cli_call` 改环境变量白名单传递，黑名单拦截 PYTHONPATH/LD_PRELOAD 等 |
+| 2 | `_cli_call` 子进程继承敏感环境变量 | 同上白名单方案 |
+| 3 | `cred_crypto` 密钥仅由 hostname+username 派生 | `cred_crypto.py` 新增 `_get_machine_id()`，密钥派生材料加入机器唯一标识 |
+
+**改动文件**：`common.py`、`cred_crypto.py`（与主线 agent 同步）
+
+**验证**：2 文件语法编译通过；风险1+2（白名单/黑名单/敏感变量）、风险3（machine-id+加解密往返+派生材料）全部通过
+
 ### 2026-06-29 硬编码凭证：cred_crypto 密钥派生退化检测（同步主线）
 
 火山报主线 `cred_crypto._derive_key()` 在 host/user 全空（容器环境）时退化成固定弱密钥。本 agent cred_crypto.py 与主线同源（差异 0），存在同样问题，同步修复：host/user 均空时拒绝生成密钥。三 agent 同步。

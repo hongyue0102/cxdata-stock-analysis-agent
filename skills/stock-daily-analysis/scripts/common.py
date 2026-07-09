@@ -143,6 +143,8 @@ def _cli_call(command: str, subcommand: str = None, args: list = None, raw_outpu
         CLI 返回的 JSON 字典
 
     安全（缓解风险3）：异常时不把完整 cmd（可能含敏感参数）放入 error，只返回脱敏的类型信息。
+    安全（缓解火山风险1+2）：环境变量白名单传递，只传子进程必需变量，
+    拒绝 PYTHONPATH/PYTHONHOME/LD_PRELOAD 等危险变量和敏感变量泄露给子进程。
     """
     args = args or []
     cmd = [_get_python_exe(), str(_get_cli_path()), command]
@@ -150,7 +152,26 @@ def _cli_call(command: str, subcommand: str = None, args: list = None, raw_outpu
         cmd.append(subcommand)
     cmd.extend(args)
 
-    env = os.environ.copy()
+    # 环境变量白名单：只传子进程必需变量，阻断 PYTHONPATH/LD_PRELOAD 等 RCE 向量，
+    # 同时避免 AWS_*、DATABASE_URL 等敏感变量泄露给子进程（火山风险1+2）
+    _ENV_WHITELIST_PREFIXES = (
+        "PATH", "HOME", "USER", "USERNAME", "LOGNAME", "LANG", "LC_",
+        "TERM", "TMPDIR", "TEMP", "TMP", "SHELL", "PWD",
+        "CXDA_CACHE_", "CLAUDE_WORKSPACE",
+        "HOSTNAME", "HOST",
+    )
+    _ENV_BLACKLIST_EXACT = {
+        "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONINSPECT",
+        "PYTHONDEBUG", "PYTHONDONTWRITEBYTECODE", "PYTHONNOUSERSITE",
+        "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH", "LD_DEBUG",
+    }
+    env = {}
+    for k, v in os.environ.items():
+        if k in _ENV_BLACKLIST_EXACT:
+            continue
+        if any(k.startswith(prefix) for prefix in _ENV_WHITELIST_PREFIXES):
+            env[k] = v
     env.setdefault("CXDA_CACHE_WORKSPACE", _get_workspace())
 
     try:
