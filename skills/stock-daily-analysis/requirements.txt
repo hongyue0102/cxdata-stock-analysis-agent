@@ -1,4 +1,7 @@
 pandas>=2.0.0
 numpy>=1.24.0
-requests>=2.31.0
+# 锁 2.32.0+ 修复 CVE-2023-32681 / CVE-2024-35195
+requests>=2.32.0,<3.0.0
 python-dotenv>=1.0.0
+# 凭证加解密硬依赖（cred_crypto.py）；锁 42+ 避免历史 CVE
+cryptography>=42.0.0,<45.0.0

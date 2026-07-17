@@ -15,14 +15,48 @@ _CONTROL_RE = re.compile(r"[\r\n\t\x00-\x1f\x7f]")
 
 
 def _sanitize(value) -> str:
-    """净化用户/API 可控字段：剥离控制字符并转义 HTML 特殊字符，防止 XSS。"""
+    """净化用户/API 可控字段：剥离控制字符并转义 HTML 特殊字符，防止 XSS。
+
+    转义覆盖 & < > " '（含单引号 &#x27;，缓解单引号 HTML 属性上下文 XSS，
+    如 `<div title='{value}'>`；仅转义双引号无法拦住 `' onerror='...`）。
+    """
     if value is None:
         return ""
     cleaned = _CONTROL_RE.sub(" ", str(value))
     return (cleaned.replace("&", "&amp;")
                    .replace("<", "&lt;")
                    .replace(">", "&gt;")
-                   .replace('"', "&quot;"))
+                   .replace('"', "&quot;")
+                   .replace("'", "&#x27;"))
+
+
+def _safe_int_score(value, lo: int = 0, hi: int = 100, default: int = 50) -> int:
+    """把评分类字段强转为 [lo, hi] 区间的 int，非法值回退 default。
+
+    缓解：AI/API 返回的 sentiment_score 若为字符串或含控制字符，直接插入报告可能触发
+    终端转义序列注入或 HTML/JS 注入（前端渲染场景）。此处强制类型收敛。
+    """
+    try:
+        n = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    if n < lo:
+        return lo
+    if n > hi:
+        return hi
+    return n
+
+
+def _fmt_num(value, spec: str, default: str = "N/A") -> str:
+    """按 spec 格式化数字字段，非法值输出安全占位符。
+
+    缓解：数值字段（价格/均线/乖离率/支撑位/压力位）若为字符串或含恶意内容，
+    走 float 转换后再格式化；无法转换则输出 default，避免原始不可信字符串入报告。
+    """
+    try:
+        return format(float(value), spec)
+    except (TypeError, ValueError):
+        return default
 
 
 @dataclass
@@ -67,23 +101,23 @@ def format_analysis_report(report: AnalysisReport) -> str:
         f"【核心结论】",
         f"  AI结论: {_sanitize(report.operation_advice)}",
         f"  趋势预测: {_sanitize(report.trend_prediction)}",
-        f"  情绪评分: {report.sentiment_score}/100",
+        f"  情绪评分: {_safe_int_score(report.sentiment_score)}/100",
         f"  置信度: {_sanitize(report.confidence_level)}",
         "",
         f"【技术面分析】",
     ]
     
-    # 技术指标
+    # 技术指标（数值字段走 _fmt_num 强制类型收敛，避免不可信字符串入报告）
     tech = report.technical_summary
     if 'current_price' in tech:
-        lines.append(f"  当前价格: {tech.get('current_price', 'N/A')}")
+        lines.append(f"  当前价格: {_fmt_num(tech.get('current_price'), '.2f')}")
     
-    if 'ma5' in tech and isinstance(tech['ma5'], (int, float)):
-        lines.append(f"  MA5: {tech['ma5']:.2f} (乖离率: {tech.get('bias_ma5', 0):+.2f}%)")
-    if 'ma10' in tech and isinstance(tech['ma10'], (int, float)):
-        lines.append(f"  MA10: {tech['ma10']:.2f} (乖离率: {tech.get('bias_ma10', 0):+.2f}%)")
-    if 'ma20' in tech and isinstance(tech['ma20'], (int, float)):
-        lines.append(f"  MA20: {tech['ma20']:.2f}")
+    if 'ma5' in tech:
+        lines.append(f"  MA5: {_fmt_num(tech.get('ma5'), '.2f')} (乖离率: {_fmt_num(tech.get('bias_ma5', 0), '+.2f')}%)")
+    if 'ma10' in tech:
+        lines.append(f"  MA10: {_fmt_num(tech.get('ma10'), '.2f')} (乖离率: {_fmt_num(tech.get('bias_ma10', 0), '+.2f')}%)")
+    if 'ma20' in tech:
+        lines.append(f"  MA20: {_fmt_num(tech.get('ma20'), '.2f')}")
     
     if 'trend_status' in tech:
         lines.append(f"  趋势状态: {_sanitize(tech.get('trend_status', 'N/A'))}")
@@ -103,13 +137,13 @@ def format_analysis_report(report: AnalysisReport) -> str:
     if report.support_levels:
         lines.append(f"【支撑位】")
         for level in report.support_levels[:3]:
-            lines.append(f"  - {level:.2f}")
+            lines.append(f"  - {_fmt_num(level, '.2f')}")
         lines.append("")
     
     if report.resistance_levels:
         lines.append(f"【压力位】")
         for level in report.resistance_levels[:3]:
-            lines.append(f"  - {level:.2f}")
+            lines.append(f"  - {_fmt_num(level, '.2f')}")
         lines.append("")
     
     # 看多理由
@@ -167,7 +201,7 @@ def format_dashboard_report(reports: List[AnalysisReport]) -> str:
     for report in reports:
         emoji = "🟢" if report.decision_type == 'buy' else "🟡" if report.decision_type == 'hold' else "🔴"
         lines.append(f"{emoji} {_sanitize(report.name)} ({_sanitize(report.code)})")
-        lines.append(f"   结论: {_sanitize(report.operation_advice)} | 评分: {report.sentiment_score}/100")
+        lines.append(f"   结论: {_sanitize(report.operation_advice)} | 评分: {_safe_int_score(report.sentiment_score)}/100")
         lines.append(f"   趋势: {_sanitize(report.trend_prediction)}")
         
         # 添加关键技术指标
@@ -175,7 +209,7 @@ def format_dashboard_report(reports: List[AnalysisReport]) -> str:
         key_info = []
         
         if 'bias_ma5' in tech:
-            key_info.append(f"乖离率: {tech['bias_ma5']:+.1f}%")
+            key_info.append(f"乖离率: {_fmt_num(tech.get('bias_ma5'), '+.1f')}%")
         if 'macd_status' in tech:
             key_info.append(f"MACD: {_sanitize(tech['macd_status'])}")
         
@@ -214,7 +248,7 @@ def create_report_from_result(result: Dict[str, Any]) -> AnalysisReport:
     return AnalysisReport(
         code=result.get('code', ''),
         name=result.get('name', ''),
-        sentiment_score=ai_result.get('sentiment_score', 50),
+        sentiment_score=_safe_int_score(ai_result.get('sentiment_score', 50)),
         trend_prediction=ai_result.get('trend_prediction', '震荡'),
         operation_advice=advice,
         decision_type=decision_type,

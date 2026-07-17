@@ -28,14 +28,41 @@ except ImportError:
 
 # ── 工作空间探测 ──────────────────────────────────────────────────────
 
+def _ensure_dir_not_symlink(path: Path) -> None:
+    """确保目录不是符号链接（缓解 workspace 指向系统目录的 chmod 攻击）。
+
+    攻击模型：攻击者预置 `ln -s /etc ~/.cxda-cache`，随后本模块 mkdir/chmod 0o700
+    会作用到 /etc，造成 DoS/越权。用 lstat 显式检测 symlink：
+      - 若已存在且是 symlink → 拒绝并抛错（不做任何 mkdir/chmod）；
+      - 若已存在但类型不是目录 → 也拒绝（避免 chmod 到普通文件）；
+      - 若不存在 → 不动，交给调用方 mkdir。
+    """
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return
+    import stat as _stat
+    if _stat.S_ISLNK(st.st_mode):
+        raise RuntimeError(f"拒绝 workspace {path} 为符号链接（缓解 symlink 攻击）")
+    if not _stat.S_ISDIR(st.st_mode):
+        raise RuntimeError(f"拒绝 workspace {path} 非目录（存在非目录节点）")
+
+
 def _validate_workspace_path(workspace: Path, source: str = "") -> Path:
-    """校验 workspace 路径合理性（缓解环境变量路径遍历）。
+    """校验 workspace 路径合理性（缓解环境变量路径遍历 + symlink 攻击）。
 
     拒绝系统关键目录、要求在用户家目录下，否则回退默认 ~/.cxda-cache。
+    回退路径同样走 _ensure_dir_not_symlink 检测，避免默认路径被预置为软链。
+
+    安全说明：SYSTEM_CRITICAL 不再包含 /root。因为 /root 是 root 用户的默认家目录，
+    默认回退路径 ~/.cxda-cache 对 root 用户即 /root/.cxda-cache，将 /root 列为关键目录
+    与"要求在家目录下"的规则直接冲突，会让 root 用户永远拿不到工作空间。
+    /root 的访问隔离由文件系统权限（默认 0o700）+ 本模块写入使用的 0o600 保证，
+    不需要在此重复拦截。
     """
     SYSTEM_CRITICAL = (
         "/etc", "/bin", "/sbin", "/usr", "/boot", "/dev", "/proc", "/sys",
-        "/var", "/lib", "/lib64", "/root", "/Library", "/System",
+        "/var", "/lib", "/lib64", "/Library", "/System",
     )
     home = Path.home().resolve()
     resolved = workspace.resolve()
@@ -43,16 +70,27 @@ def _validate_workspace_path(workspace: Path, source: str = "") -> Path:
     for crit in SYSTEM_CRITICAL:
         if resolved_str == crit or resolved_str.startswith(crit + os.sep):
             sys.stderr.write(f"[WARN] 拒绝 workspace {resolved_str}（系统关键目录），回退默认。来源: {source}\n")
-            return Path.home() / ".cxda-cache"
+            fallback = Path.home() / ".cxda-cache"
+            _ensure_dir_not_symlink(fallback)
+            return fallback
     if not resolved_str.startswith(str(home) + os.sep) and resolved_str != str(home):
         sys.stderr.write(f"[WARN] 拒绝 workspace {resolved_str}（不在用户家目录下），回退默认。来源: {source}\n")
-        return Path.home() / ".cxda-cache"
+        fallback = Path.home() / ".cxda-cache"
+        _ensure_dir_not_symlink(fallback)
+        return fallback
+    _ensure_dir_not_symlink(resolved)
     return resolved
 
 
 def _secure_write_text(file_path: Path, content: str) -> None:
-    """以 0o600 权限写文本文件（缓解凭证文件默认 0o644 可被同机用户读取）。保留 fcntl 文件锁。"""
+    """以 0o600 权限写文本文件（缓解凭证文件默认 0o644 可被同机用户读取）。保留 fcntl 文件锁。
+
+    O_NOFOLLOW（缓解 TOCTOU 与 symlink race）：目标若已是符号链接则 open 直接失败，
+    杜绝攻击者在 check 与 use 之间把文件替换为指向敏感位置的软链。
+    """
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
     fd = os.open(file_path, flags, 0o600)
@@ -66,6 +104,31 @@ def _secure_write_text(file_path: Path, content: str) -> None:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
+def _secure_read_text(file_path: Path) -> str:
+    """以 O_NOFOLLOW 读取文本文件（缓解 symlink race，配合 _secure_write_text 使用）。
+
+    Path.read_text() 会跟随符号链接，若目录权限被误配，攻击者可在 check-exists 与
+    实际读取之间把文件替换为软链，导致越权读取敏感文件。用 os.open + O_NOFOLLOW
+    从 fd 直接读，若目标已成 symlink 则直接失败。
+    """
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    fd = os.open(file_path, flags)
+    try:
+        chunks = []
+        while True:
+            buf = os.read(fd, 65536)
+            if not buf:
+                break
+            chunks.append(buf)
+        return b"".join(chunks).decode("utf-8")
+    finally:
+        os.close(fd)
+
+
 def detect_workspace() -> Path:
     """
     自动检测工作空间路径
@@ -75,12 +138,14 @@ def detect_workspace() -> Path:
     2. CLAUDE_WORKSPACE 环境变量
     3. 默认 ~/.cxda-cache
 
-    环境变量路径需通过 _validate_workspace_path 校验。
+    所有路径（含默认值）都经 _validate_workspace_path 校验，避免 symlink 攻击
+    （攻击者预置 `ln -s /etc ~/.cxda-cache` 后，mkdir/chmod 会作用到 /etc）。
     """
     for env_var in ["CXDA_CACHE_WORKSPACE", "CLAUDE_WORKSPACE"]:
         path = os.environ.get(env_var)
         if path:
             workspace = _validate_workspace_path(Path(path).expanduser(), source=env_var)
+            _ensure_dir_not_symlink(workspace)
             workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
             try:
                 os.chmod(workspace, 0o700)
@@ -88,7 +153,10 @@ def detect_workspace() -> Path:
                 pass
             return workspace
 
-    workspace = Path.home() / ".cxda-cache"
+    # 默认路径也走 _validate_workspace_path，确保 lstat 检查不被跳过
+    default = Path.home() / ".cxda-cache"
+    workspace = _validate_workspace_path(default, source="default")
+    _ensure_dir_not_symlink(workspace)
     workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         os.chmod(workspace, 0o700)
@@ -125,15 +193,44 @@ class CacheManager:
             raise ValueError(f"非法路径（拒绝路径遍历）: {filename}")
         return target
 
+    # 公域文件名白名单：仅允许字母/数字/下划线/点/连字符，禁止 / \ .. 等分隔与逃逸字符
+    _SHARED_NAME_RE = __import__("re").compile(r"^[A-Za-z0-9_.\-]+$")
+    # 纯点名（.、..、... 等）额外拒绝：仅靠字符白名单会漏掉 ".."（不含分隔符仍可回溯父目录）
+    _ALL_DOTS_RE = __import__("re").compile(r"^\.+$")
+
+    @classmethod
+    def _validate_shared_filename(cls, filename: str) -> str:
+        """校验公域文件名，拒绝路径遍历/注入字符（用于 delete 等词法路径场景）。
+
+        双重防护：字符白名单 + 纯点名拒绝（`.`、`..`、`...` 均能定位特殊目录）。
+        """
+        if not isinstance(filename, str) or not filename or not cls._SHARED_NAME_RE.match(filename) or ".." in filename:
+            raise ValueError(f"非法公域文件名（拒绝路径遍历）: {filename!r}")
+        if cls._ALL_DOTS_RE.match(filename):
+            raise ValueError(f"非法公域文件名（拒绝纯点名）: {filename!r}")
+        return filename
+
+    def _get_shared_path_lexical(self, filename: str) -> Path:
+        """获取公域文件的词法路径（不 resolve，缓解 delete 跟随 symlink）。
+
+        用途：delete 操作必须删除软链本身而非其目标。resolve 会展开 symlink，
+        导致 unlink 删掉链接指向的真实文件（可能位于共享目录外）。这里直接做
+        词法 join，配合白名单已阻断的 `..` 和 `/` 保证不会逃逸。
+        """
+        self._validate_shared_filename(filename)
+        shared_dir = self.workspace / ".shared"
+        shared_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return shared_dir / filename
+
     def shared_read(self, filename: str) -> dict:
-        """读取公域文件"""
+        """读取公域文件（O_NOFOLLOW 拒绝符号链接，缓解 symlink race）。"""
         file_path = self._get_shared_path(filename)
 
         if not file_path.exists():
             return {"success": False, "error": f"文件不存在: {file_path}"}
 
         try:
-            content = file_path.read_text(encoding="utf-8")
+            content = _secure_read_text(file_path)
             return {"success": True, "content": content, "path": str(file_path)}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -149,12 +246,14 @@ class CacheManager:
             return {"success": False, "error": str(e)}
 
     def shared_append(self, filename: str, content: str) -> dict:
-        """追加公域文件，使用 O_APPEND + 单次 os.write 降低并发丢写风险（权限 0o600）。"""
+        """追加公域文件，O_APPEND + O_NOFOLLOW + 单次 os.write（缓解 symlink race，权限 0o600）。"""
         file_path = self._get_shared_path(filename)
 
         try:
             data = content.encode("utf-8")
             flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
             if hasattr(os, "O_BINARY"):
                 flags |= os.O_BINARY
 
@@ -176,14 +275,29 @@ class CacheManager:
             return {"success": False, "error": str(e)}
 
     def shared_delete(self, filename: str) -> dict:
-        """删除公域文件"""
-        file_path = self._get_shared_path(filename)
+        """删除公域文件本身（若为符号链接，只删软链、不跟随目标）。
 
-        if not file_path.exists():
+        安全（缓解 symlink 误删）：使用 lexical path（不 resolve），配合白名单
+        拒绝 `..`、`/`；用 os.lstat 判断类型；用 os.unlink 对路径直接操作，
+        不跟随 symlink（Path.unlink / os.unlink 本身不 follow symlink 对文件而言，
+        但为防歧义，路径不 resolve 是关键）。
+        """
+        try:
+            file_path = self._get_shared_path_lexical(filename)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+
+        # lstat：文件不存在或为其它异常类型，明确报错
+        try:
+            os.lstat(file_path)
+        except FileNotFoundError:
             return {"success": False, "error": f"文件不存在: {file_path}"}
+        except OSError as e:
+            return {"success": False, "error": f"lstat 失败: {e}"}
 
         try:
-            file_path.unlink()
+            # os.unlink 对路径直接操作，若路径本身是 symlink 则删软链（不跟随）
+            os.unlink(file_path)
             return {"success": True, "path": str(file_path), "file": filename}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -269,13 +383,29 @@ class CacheManager:
     # skill_name / filename 白名单：仅允许字母数字下划线连字符点，
     # 从源头拒绝 ../ 、/ 、URL编码(%2f) 等路径分隔与逃逸字符（缓解路径遍历）
     _SAFE_NAME_RE = __import__("re").compile(r"^[A-Za-z0-9_.\-]+$")
+    # 私域也需要拒绝纯点名（.、..、...）——字符白名单不足以拦 ".."
+    _SAFE_ALL_DOTS_RE = __import__("re").compile(r"^\.+$")
 
     @classmethod
     def _validate_skill_name(cls, skill_name: str) -> str:
-        """校验 skill_name，拦截路径遍历（../）与注入字符。所有接收 skill_name 的入口统一调用。"""
-        if not isinstance(skill_name, str) or not cls._SAFE_NAME_RE.match(skill_name) or ".." in skill_name:
+        """校验 skill_name，拦截路径遍历（../）与注入字符。所有接收 skill_name 的入口统一调用。
+
+        双重防护：字符白名单（拒绝分隔符）+ 纯点名拒绝（拒绝 . / .. / ... 特殊目录）。
+        """
+        if not isinstance(skill_name, str) or not skill_name or not cls._SAFE_NAME_RE.match(skill_name) or ".." in skill_name:
             raise ValueError(f"非法 skill 名称（拒绝路径遍历）: {skill_name!r}")
+        if cls._SAFE_ALL_DOTS_RE.match(skill_name):
+            raise ValueError(f"非法 skill 名称（拒绝纯点名）: {skill_name!r}")
         return skill_name
+
+    @classmethod
+    def _validate_private_filename(cls, filename: str) -> str:
+        """校验私域文件名，同 skill_name 双重防护。"""
+        if not isinstance(filename, str) or not filename or not cls._SAFE_NAME_RE.match(filename) or ".." in filename:
+            raise ValueError(f"非法 file 名称（拒绝路径遍历）: {filename!r}")
+        if cls._SAFE_ALL_DOTS_RE.match(filename):
+            raise ValueError(f"非法 file 名称（拒绝纯点名）: {filename!r}")
+        return filename
 
 
     def _get_skill_path(self, skill_name: str, subdir: str = "data") -> Path:
@@ -292,13 +422,12 @@ class CacheManager:
 
         双重防护（缓解路径遍历）：
         1. 入口白名单：skill_name / filename 只允许字母数字下划线连字符点，
-           从源头拒绝 ../ 、/ 、URL编码(%2f) 等路径分隔与逃逸字符；
+           从源头拒绝 ../ 、/ 、URL编码(%2f) 等路径分隔与逃逸字符；额外拒绝纯点名；
         2. resolve 校验：目标路径 resolve 后必须仍位于 skill 子目录内。
         """
-        # 入口白名单：skill_name / filename 只允许安全字符（复用 _validate_skill_name）
+        # 入口白名单（含纯点名拒绝）
         self._validate_skill_name(skill_name)
-        if not isinstance(filename, str) or not self._SAFE_NAME_RE.match(filename) or ".." in filename:
-            raise ValueError(f"非法 file 名称（拒绝路径遍历）: {filename!r}")
+        self._validate_private_filename(filename)
 
         skill_path = self._get_skill_path(skill_name, subdir)
         target = (skill_path / filename).resolve()
@@ -307,6 +436,13 @@ class CacheManager:
         except ValueError:
             raise ValueError(f"非法路径（拒绝路径遍历）: skill={skill_name!r}, file={filename!r}")
         return target
+
+    def _get_file_path_lexical(self, skill_name: str, filename: str, subdir: str = "data") -> Path:
+        """获取私域文件词法路径（不 resolve，缓解 delete 跟随 symlink，同 shared 版本）。"""
+        self._validate_skill_name(skill_name)
+        self._validate_private_filename(filename)
+        skill_path = self._get_skill_path(skill_name, subdir)
+        return skill_path / filename
 
     def write(self, skill_name: str, filename: str, content: str,
               subdir: str = "data", append: bool = False) -> dict:
@@ -348,14 +484,14 @@ class CacheManager:
             return {"success": False, "error": str(e)}
 
     def read(self, skill_name: str, filename: str, subdir: str = "data") -> dict:
-        """读取私域文件"""
+        """读取私域文件（O_NOFOLLOW 拒绝符号链接，缓解 symlink race）。"""
         file_path = self._get_file_path(skill_name, filename, subdir)
 
         if not file_path.exists():
             return {"success": False, "error": f"文件不存在: {file_path}"}
 
         try:
-            content = file_path.read_text(encoding="utf-8")
+            content = _secure_read_text(file_path)
             return {
                 "success": True,
                 "content": content,
@@ -367,14 +503,25 @@ class CacheManager:
             return {"success": False, "error": str(e)}
 
     def delete(self, skill_name: str, filename: str, subdir: str = "data") -> dict:
-        """删除私域文件"""
-        file_path = self._get_file_path(skill_name, filename, subdir)
+        """删除私域文件本身（若为符号链接，只删软链、不跟随目标）。
 
-        if not file_path.exists():
-            return {"success": False, "error": f"文件不存在: {file_path}"}
+        缓解 symlink 误删：使用 lexical path（不 resolve），os.unlink 直接对
+        路径操作，不 follow symlink。
+        """
+        try:
+            file_path = self._get_file_path_lexical(skill_name, filename, subdir)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
 
         try:
-            file_path.unlink()
+            os.lstat(file_path)
+        except FileNotFoundError:
+            return {"success": False, "error": f"文件不存在: {file_path}"}
+        except OSError as e:
+            return {"success": False, "error": f"lstat 失败: {e}"}
+
+        try:
+            os.unlink(file_path)
             return {
                 "success": True,
                 "path": str(file_path),

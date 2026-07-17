@@ -23,6 +23,17 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _QUERY_SCRIPT = _SCRIPT_DIR / "query.py"
 
 
+# 控制字符与换行（防日志注入 / 伪造审计条目）
+_CONTROL_RE = re.compile(r"[\r\n\t\x00-\x1f\x7f]")
+
+
+def _sanitize_for_log(value) -> str:
+    """净化日志输出，剥离换行等控制字符，防止日志注入/伪造审计条目。"""
+    if value is None:
+        return ""
+    return _CONTROL_RE.sub(" ", str(value))
+
+
 def _run_query(api_id: str, code: str, page: int, page_size: int = 20) -> Optional[Dict]:
     """通过 subprocess 调用 query.py api，返回解析后的 dict。"""
     cmd = [
@@ -47,7 +58,7 @@ def _run_query(api_id: str, code: str, page: int, page_size: int = 20) -> Option
         return None
 
     if result.returncode != 0:
-        logger.error(f"query.py 退出码 {result.returncode}, stderr: {result.stderr[:200]}")
+        logger.error(f"query.py 退出码 {result.returncode}, stderr: {_sanitize_for_log(result.stderr[:200])}")
         return None
 
     stdout = result.stdout.strip()
@@ -58,7 +69,7 @@ def _run_query(api_id: str, code: str, page: int, page_size: int = 20) -> Option
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError as e:
-        logger.error(f"query.py 响应解析失败: {e}")
+        logger.error(f"query.py 响应解析失败: {_sanitize_for_log(str(e))}")
         return None
 
     # 处理特殊状态
@@ -67,7 +78,7 @@ def _run_query(api_id: str, code: str, page: int, page_size: int = 20) -> Option
         logger.warning("触发 50 次硬限制，需先执行 query.py session confirm")
         return None
     if status in ("failed", "terms_not_accepted"):
-        logger.error(f"鉴权失败: {data.get('error', '未知错误')}")
+        logger.error(f"鉴权失败: {_sanitize_for_log(data.get('error', '未知错误'))}")
         return None
 
     return data
@@ -82,7 +93,7 @@ def _fetch_daily_quote(code: str, page: int, page_size: int = 20) -> Optional[Di
     if data.get('code') == '10000':
         return data
 
-    logger.error(f"API 返回错误: {data.get('msg', 'unknown')}")
+    logger.error(f"API 返回错误: {_sanitize_for_log(data.get('msg', 'unknown'))}")
     return None
 
 
@@ -95,12 +106,29 @@ def _fetch_fq_quote(code: str, page: int, page_size: int = 20) -> Optional[Dict]
     if data.get('code') == '10000':
         return data
 
-    logger.error(f"前复权 API 返回错误: {data.get('msg', 'unknown')}")
+    logger.error(f"前复权 API 返回错误: {_sanitize_for_log(data.get('msg', 'unknown'))}")
     return None
 
 
 def normalize_code(stock_code: str) -> tuple:
+    """归一化股票代码 → (market, code)。
+
+    安全（缓解注入）：只接受强类型格式，任何未匹配的输入返回 (None, None)，
+    由调用方拒绝，绝不再"兜底当 A 股"传给后端 API。之前的兜底会把任意字符串
+    作为 stkCode 拼进 URL 或参数，若后端未做参数化查询/白名单校验，可能产生 SQLi/
+    路径遍历/命令注入。
+
+    合法输入：
+      - 6 位数字：A 股（900/200 前缀视作 B 股）
+      - HK<数字> / 5 位数字：港股
+      - 1-5 位英文字母（可带 .A~Z）：美股
+    其他一律拒绝。
+    """
+    if not isinstance(stock_code, str):
+        return None, None
     code = stock_code.strip()
+    if not code:
+        return None, None
     if code.isdigit() and len(code) == 6:
         # B 股识别（本 agent 仅分析 A 股，需排除 B 股）：
         # 上交所 B 股 900 开头、深交所 B 股 200 开头。判成 'b' 市场，
@@ -108,15 +136,18 @@ def normalize_code(stock_code: str) -> tuple:
         if code.startswith("900") or code.startswith("200"):
             return 'b', code
         return 'a', code
-    if re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', code.upper()):
-        return 'us', code.upper()
+    upper = code.upper()
+    if re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', upper):
+        return 'us', upper
     if code.lower().startswith('hk'):
         numeric_part = code[2:]
-        if numeric_part.isdigit():
+        if numeric_part.isdigit() and 1 <= len(numeric_part) <= 5:
             return 'hk', numeric_part.zfill(5)
+        return None, None
     if code.isdigit() and len(code) == 5:
         return 'hk', code.zfill(5)
-    return 'a', code
+    # 拒绝任何未识别格式，禁止兜底为 A 股（缓解 SQLi/注入）
+    return None, None
 
 
 def get_daily_data(stock_code: str, days: int = 20) -> Optional[Tuple[pd.DataFrame, str]]:
@@ -133,8 +164,12 @@ def get_daily_data(stock_code: str, days: int = 20) -> Optional[Tuple[pd.DataFra
         DataFrame 同时含原始字段和前复权字段。
     """
     market, code = normalize_code(stock_code)
+    safe_stock_code = _sanitize_for_log(stock_code)
+    if market is None:
+        logger.warning(f"非法股票代码格式：{safe_stock_code}")
+        return None
     if market != 'a':
-        logger.warning(f"仅支持 A 股，{stock_code} 为 {market} 市场代码")
+        logger.warning(f"仅支持 A 股，{safe_stock_code} 为 {_sanitize_for_log(market)} 市场代码")
         return None
 
     # 多页拼接（不复权）
@@ -153,7 +188,7 @@ def get_daily_data(stock_code: str, days: int = 20) -> Optional[Tuple[pd.DataFra
             break
 
     if not all_results:
-        logger.warning(f"{stock_code} 无日行情数据")
+        logger.warning(f"{safe_stock_code} 无日行情数据")
         return None
 
     # 股票名称
@@ -223,9 +258,9 @@ def get_daily_data(stock_code: str, days: int = 20) -> Optional[Tuple[pd.DataFra
             # 合并到主 df
             df = df.merge(fq_df[['date', 'open_fq', 'high_fq', 'low_fq', 'close_fq']],
                           on='date', how='left')
-            logger.info(f"{stock_code} 已合并前复权 OHLC，用于技术指标计算")
+            logger.info(f"{safe_stock_code} 已合并前复权 OHLC，用于技术指标计算")
     else:
-        logger.warning(f"{stock_code} 前复权数据拉取失败，技术指标将退化为使用不复权价格")
+        logger.warning(f"{safe_stock_code} 前复权数据拉取失败，技术指标将退化为使用不复权价格")
         # 退化：用原始价格填充前复权字段（保证后续代码不报错）
         for col_src, col_dst in [('open', 'open_fq'), ('high', 'high_fq'),
                                   ('low', 'low_fq'), ('close', 'close_fq')]:

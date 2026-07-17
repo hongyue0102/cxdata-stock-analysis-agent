@@ -16,6 +16,8 @@ CXDA Skill 授权模块
 
 import argparse
 import json
+import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -38,6 +40,48 @@ from common import (
 )
 
 
+# ── 审计日志（缓解风险：认证操作缺失可追溯性）──────────────────────────
+# 结构化 JSON 行输出到 stderr，供采集侧接入。不打印任何敏感字段（原始手机号、验证码、
+# userKey、authtoken）。手机号统一走 _mask_phone 脱敏；userKey 走 mask_user_key。
+_AUDIT_CONTROL_RE = re.compile(r"[\r\n\t\x00-\x1f\x7f]")
+
+
+def _audit_scrub(value):
+    """净化审计元数据：剥离控制字符，避免日志伪造/终端转义注入。"""
+    if value is None:
+        return None
+    if isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, dict):
+        return {k: _audit_scrub(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_audit_scrub(v) for v in value]
+    return _AUDIT_CONTROL_RE.sub(" ", str(value))
+
+
+_audit_logger = logging.getLogger("cxda.auth.audit")
+if not _audit_logger.handlers:
+    _audit_handler = logging.StreamHandler(sys.stderr)
+    _audit_handler.setFormatter(logging.Formatter("%(message)s"))
+    _audit_logger.addHandler(_audit_handler)
+    _audit_logger.setLevel(logging.INFO)
+    _audit_logger.propagate = False
+
+
+def _audit(op: str, success: bool, **meta):
+    """记录一条审计条目。op=操作名，success=业务是否成功，**meta=非敏感附加元数据。"""
+    try:
+        entry = {
+            "ts": int(time.time()),
+            "op": _audit_scrub(op),
+            "success": bool(success),
+            "meta": _audit_scrub(meta) if meta else {},
+        }
+        _audit_logger.info(json.dumps(entry, ensure_ascii=False))
+    except Exception:
+        pass
+
+
 # ── 常量 ──────────────────────────────────────────────────────────────
 
 TERMS_ACCEPTED_KEY = "terms_accepted"
@@ -52,7 +96,13 @@ VIP_URL = "https://cdp.ccxe.com.cn/clause/vip"
 
 
 def _mask_phone(phone: str) -> str:
-    """手机号脱敏：138****5678"""
+    """手机号脱敏：138****5678。
+
+    安全（缓解隐私日志泄漏）：短号码（长度 <= 7）时前 3 + 后 4 会覆盖整个字符串，
+    等于完全暴露原文；此情况统一返回 "****" 全脱敏。空/None 亦返回 "****"。
+    """
+    if not phone or not isinstance(phone, str) or len(phone) <= 7:
+        return "****"
     return phone[:3] + "****" + phone[-4:]
 
 
@@ -110,6 +160,7 @@ def cmd_terms_check():
     auth = get_cached_auth()
     accepted = auth.get(TERMS_ACCEPTED_KEY, False)
 
+    _audit("terms-check", True, terms_accepted=accepted)
     print(json.dumps({
         "success": True,
         "terms_accepted": accepted,
@@ -125,6 +176,7 @@ def cmd_terms_accept():
     auth[TERMS_ACCEPTED_KEY] = True
     save_auth(auth)
 
+    _audit("terms-accept", True)
     print(json.dumps({
         "success": True,
         "terms_accepted": True,
@@ -134,8 +186,43 @@ def cmd_terms_accept():
 
 # ── 命令：terms-decline ───────────────────────────────────────────────
 
-def cmd_terms_decline():
-    """用户拒绝服务协议"""
+def cmd_terms_decline(assume_yes: bool = False):
+    """用户拒绝服务协议（敏感操作：会清除本地登录状态，必须显式确认）。
+
+    安全（缓解误操作）：直接清空 CXDA_USER_KEY / authtoken / authtoken_expire 前
+    要求显式确认。三种确认方式（任一即可）：
+      1) 命令行 --yes
+      2) stdin JSON {"confirm": true}
+      3) 交互终端输入 y/Y
+    未确认则不动任何数据，返回 need_confirmation。
+    """
+    if not assume_yes:
+        raw_confirm = _load_stdin_once()
+        confirmed = False
+        if raw_confirm:
+            try:
+                obj = json.loads(raw_confirm)
+                if isinstance(obj, dict) and bool(obj.get("confirm")):
+                    confirmed = True
+            except (json.JSONDecodeError, ValueError):
+                if raw_confirm.strip().lower() in ("y", "yes", "true", "1"):
+                    confirmed = True
+        elif sys.stdin.isatty():
+            try:
+                ans = input("确认拒绝服务协议并清除本地认证信息? [y/N]: ").strip().lower()
+                confirmed = ans in ("y", "yes")
+            except EOFError:
+                confirmed = False
+
+        if not confirmed:
+            _audit("terms-decline", False, reason="not_confirmed")
+            print(json.dumps({
+                "success": False,
+                "status": "need_confirmation",
+                "message": "此操作将清除本地认证信息，请通过 --yes 或 stdin {\"confirm\":true} 显式确认。",
+            }, ensure_ascii=False))
+            return
+
     auth = get_cached_auth()
     auth[TERMS_ACCEPTED_KEY] = False
     # 同时清除登录状态
@@ -144,6 +231,7 @@ def cmd_terms_decline():
     auth["authtoken_expire"] = ""
     save_auth(auth)
 
+    _audit("terms-decline", True, cleared_credentials=True)
     print(json.dumps({
         "success": True,
         "terms_accepted": False,
@@ -166,11 +254,13 @@ def cmd_send_code():
     """
     accepted, error_response = check_terms_accepted()
     if not accepted:
+        _audit("send-code", False, reason="terms_not_accepted")
         print(json.dumps(error_response, ensure_ascii=False))
         return
 
     phone = _read_secret_from_stdin("phone")
     if not phone:
+        _audit("send-code", False, reason="missing_phone")
         print(json.dumps({
             "code": "10400",
             "msg": "缺少手机号，请通过 stdin 传入 JSON，如：echo '{\"phone\":\"13812345678\"}' | python auth.py send-code",
@@ -178,6 +268,7 @@ def cmd_send_code():
         }, ensure_ascii=False))
         return
 
+    phone_masked = _mask_phone(phone)
     try:
         import requests
 
@@ -192,10 +283,14 @@ def cmd_send_code():
             headers=HEADERS,
             proxies=PROXIES,
             timeout=30,
+            allow_redirects=False,
         )
         resp_data = resp.json()
+        _audit("send-code", str(resp_data.get("code")) == "10000",
+               phone_masked=phone_masked, resp_code=resp_data.get("code"))
         print(json.dumps(resp_data, ensure_ascii=False))
     except Exception as e:
+        _audit("send-code", False, phone_masked=phone_masked, error_type=type(e).__name__)
         print(json.dumps({
             "code": "10500",
             "msg": f"网络异常：{_safe_net_error(e)}",
@@ -219,12 +314,14 @@ def cmd_verify():
     """
     accepted, error_response = check_terms_accepted()
     if not accepted:
+        _audit("verify", False, reason="terms_not_accepted")
         print(json.dumps(error_response, ensure_ascii=False))
         return
 
     phone = _read_secret_from_stdin("phone")
     code = _read_secret_from_stdin("code")
     if not phone or not code:
+        _audit("verify", False, reason="missing_phone_or_code")
         print(json.dumps({
             "code": "10400",
             "msg": "缺少手机号或验证码，请通过 stdin 传入 JSON，如：echo '{\"phone\":\"13812345678\",\"code\":\"123456\"}' | python auth.py verify",
@@ -248,6 +345,7 @@ def cmd_verify():
             headers=HEADERS,
             proxies=PROXIES,
             timeout=30,
+            allow_redirects=False,
         )
         resp_data = resp.json()
 
@@ -256,6 +354,7 @@ def cmd_verify():
             if isinstance(user_key, str):
                 user_key = user_key.strip()
             if not user_key:
+                _audit("verify", False, phone_masked=phone_masked, reason="empty_user_key")
                 print(json.dumps({
                     "code": "10500",
                     "msg": "接口返回成功但 userKey 为空",
@@ -276,10 +375,14 @@ def cmd_verify():
 
             safe_resp_data = dict(resp_data)
             safe_resp_data["data"] = mask_user_key(user_key)
+            _audit("verify", True, phone_masked=phone_masked,
+                   user_key_masked=mask_user_key(user_key))
             print(json.dumps(safe_resp_data, ensure_ascii=False))
         else:
+            _audit("verify", False, phone_masked=phone_masked, resp_code=resp_data.get("code"))
             print(json.dumps(resp_data, ensure_ascii=False))
     except Exception as e:
+        _audit("verify", False, phone_masked=phone_masked, error_type=type(e).__name__)
         print(json.dumps({
             "code": "10500",
             "msg": f"网络异常：{_safe_net_error(e)}",
@@ -296,6 +399,10 @@ def cmd_status():
     phone_masked = auth.get("phone_masked", "")
     authed_at = auth.get("authed_at", "")
     terms_accepted = auth.get(TERMS_ACCEPTED_KEY, False)
+
+    _audit("status", True,
+           authenticated=bool(user_key),
+           terms_accepted=bool(terms_accepted))
 
     if user_key:
         print(json.dumps({
@@ -399,19 +506,29 @@ def main():
     )
 
     # terms-decline
-    subparsers.add_parser(
+    p_decline = subparsers.add_parser(
         "terms-decline",
         help="拒绝服务协议",
-        description="标记用户拒绝服务协议，同时清除本地认证信息。",
+        description="标记用户拒绝服务协议，同时清除本地认证信息。需要显式确认。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 输出 JSON 格式：
-  {"success": true, "terms_accepted": false, "message": "已拒绝服务协议，无法继续使用相关功能"}
+  确认后 → {"success": true, "terms_accepted": false, "message": "已拒绝服务协议，无法继续使用相关功能"}
+  未确认 → {"success": false, "status": "need_confirmation", "message": "..."}
 
 说明：
-  - 同时清除本地 CXDA_USER_KEY、authtoken、authtoken_expire
+  - 敏感操作：会清除本地 CXDA_USER_KEY、authtoken、authtoken_expire
+  - 必须通过下列任一方式显式确认，缓解误操作/自动化误清除风险：
+      1) --yes / -y
+      2) stdin JSON {"confirm": true}
+      3) 交互终端输入 y/Y
   - 拒绝后无法使用任何功能
         """
+    )
+    p_decline.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="跳过确认，直接拒绝并清除本地认证信息",
     )
 
     # send-code
@@ -476,7 +593,7 @@ def main():
     elif args.command == "terms-accept":
         cmd_terms_accept()
     elif args.command == "terms-decline":
-        cmd_terms_decline()
+        cmd_terms_decline(assume_yes=getattr(args, "yes", False))
     elif args.command == "send-code":
         cmd_send_code()
     elif args.command == "verify":

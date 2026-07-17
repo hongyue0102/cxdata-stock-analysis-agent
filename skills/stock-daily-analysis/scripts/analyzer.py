@@ -32,9 +32,9 @@ def _session_start():
         cmd = [sys.executable, str(_QUERY_SCRIPT), "session", "start"]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=str(_SCRIPT_DIR))
         if result.returncode != 0:
-            logger.warning(f"session start 失败（不影响分析）: {result.stderr[:200]}")
+            logger.warning(f"session start 失败（不影响分析）: {_sanitize_for_log(result.stderr[:200])}")
     except Exception as e:
-        logger.warning(f"session start 异常（不影响分析）: {e}")
+        logger.warning(f"session start 异常（不影响分析）: {_sanitize_for_log(str(e))}")
 
 
 def _session_summary():
@@ -50,7 +50,7 @@ def _session_summary():
             print(f"  计费调用次数: {data.get('call_count')}")
             print(f"  累计消耗积分: {data.get('total_consumed')}")
     except Exception as e:
-        logger.warning(f"session summary 异常: {e}")
+        logger.warning(f"session summary 异常: {_sanitize_for_log(str(e))}")
 
 
 # ── 输入净化 ──────────────────────────────────────────────────────────
@@ -69,7 +69,8 @@ def _sanitize_for_log(value: str) -> str:
 def _sanitize_for_markdown(value: str) -> str:
     """
     净化拼入 markdown 报告的用户可控字段（股票代码、名称等），
-    剥离控制字符并转义 HTML 特殊字符，防止报告渲染为 HTML 时触发 XSS。
+    剥离控制字符并转义 HTML 特殊字符（含单引号），防止报告渲染为 HTML 时触发 XSS。
+    单引号转义 &#x27;：缓解单引号 HTML 属性上下文（如 <div title='{value}'>）的注入。
     """
     if value is None:
         return ""
@@ -77,7 +78,8 @@ def _sanitize_for_markdown(value: str) -> str:
     return (cleaned.replace("&", "&amp;")
                    .replace("<", "&lt;")
                    .replace(">", "&gt;")
-                   .replace('"', "&quot;"))
+                   .replace('"', "&quot;")
+                   .replace("'", "&#x27;"))
 
 # 导入模块
 from scripts.data_fetcher import get_daily_data
@@ -244,7 +246,7 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     # 1. 获取行情数据 — 失败则直接报错
     data_result = get_daily_data(code, days=days)
     if data_result is None:
-        return f"❌ 无法获取 {code} 的行情数据，请检查数据源配置后重试。"
+        return f"❌ 无法获取 {_sanitize_for_markdown(code)} 的行情数据，请检查数据源配置后重试。"
 
     df, name = data_result
     if df.empty:

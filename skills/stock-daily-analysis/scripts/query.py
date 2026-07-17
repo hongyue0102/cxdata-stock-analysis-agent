@@ -29,6 +29,7 @@ from common import (
     BASE_URL,
     ensure_token,
     http_get,
+    http_post_form,
     get_user_key,
     check_terms_accepted,
     output_json,
@@ -358,9 +359,9 @@ def _query_package_result(user_key, api_main=""):
     if api_main:
         params["apiMain"] = api_main
 
-    resp_data = http_get(
+    resp_data = http_post_form(
         f"{BASE_URL}/mall/api_getAuthList.htm",
-        params=params
+        data=params
     )
     if str(resp_data.get("code")) != SUCCESS_CODE:
         return {
@@ -434,9 +435,9 @@ def _fetch_api_limit_setting(api_id):
     if not user_key:
         raise RuntimeError("未找到 CXDA_USER_KEY，请先通过 auth.py 完成认证")
 
-    return http_get(
+    return http_post_form(
         f"{BASE_URL}/mall/api_getApiLimitSetting.htm",
-        params={"userKey": user_key, "apiMain": api_id}
+        data={"userKey": user_key, "apiMain": api_id}
     )
 
 
