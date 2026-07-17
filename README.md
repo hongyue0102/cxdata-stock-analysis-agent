@@ -91,6 +91,33 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-07-17 火山终版安全加固合入（客户提供通过审计的完整版本）
+
+火山客户经多轮安全扫描后主动提供最终通过审计的完整代码版本，本次合入。覆盖 8 个源码文件 + 1 个依赖文件，修复 22 项漏洞（按类别去重后 15 大类），严重度分布：CRITICAL × 1 / HIGH × 8 / MEDIUM × 12 / LOW × 3。
+
+| # | 严重度 | 修复项 |
+|---|--------|--------|
+| 1 | CRITICAL | 默认工作空间路径未做 symlink 前置检查（`cxda_cache_cli.py`） |
+| 2 | HIGH | 凭证明文缓存 CXDA_USER_KEY — 新增 `cred_crypto` 模块 |
+| 3 | HIGH | 短期凭证明文缓存 authtoken — `save_auth` 落盘前额外加密 |
+| 4 | HIGH | 密钥派生 KDF material 分隔符碰撞 — 改 JSON 序列化 |
+| 5 | HIGH | 用户名派生受环境变量污染 — `_get_effective_username` |
+| 6 | HIGH | 密钥仅依赖公开系统属性 — 引入 pepper 文件 |
+| 7 | HIGH | SQL 注入面 normalize_code 兜底 A 股 — 未识别格式拒绝 |
+| 8 | HIGH | SSRF via open-redirect — 全部 `allow_redirects=False` |
+| 9 | HIGH | 日志包含明文凭证 — 审计日志规范化 |
+| 10-15 | MEDIUM | 路径遍历（workspace/trusted_dir/纯点名/O_NOFOLLOW/lexical delete）、XSS（数值型/单引号）、短手机号脱敏、root 家目录误伤、命令行参数越权覆盖、API ID 路径注入 |
+| 22-23 | LOW | terms-decline 无显式确认、认证操作缺失审计日志 |
+
+**行为变更（需回归测试）**：
+- `auth.py terms-decline` 现需显式确认（`--yes` / stdin / 交互 y）
+- `normalize_stock_code` 拒绝无法识别的代码格式（原兜底当 A 股）
+- HTTP 请求一律不跟随 redirect
+- 老明文缓存首次读取自动加密迁移
+- 新增 `~/.cxda-cache/.cred_pepper.bin`
+
+**详细报告**：见 `火山安全加固修改报告.md`
+
 ### 2026-07-09 火山安全扫描 2 条风险修复
 
 | # | 风险 | 修复 |
