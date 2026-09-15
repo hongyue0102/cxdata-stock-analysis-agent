@@ -14,6 +14,7 @@ CXDA Skill - 统一查询脚本
 """
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -429,52 +430,81 @@ def _load_page_size_cache():
     return _PAGE_SIZE_CACHE
 
 
-def _fetch_api_limit_setting(api_id):
-    """查询接口分页大小限制。"""
-    user_key = get_user_key()
-    if not user_key:
-        raise RuntimeError("未找到 CXDA_USER_KEY，请先通过 auth.py 完成认证")
+def _page_size_cache_key(api_id, params):
+    """按接口和业务输入参数生成分页上限缓存键。"""
+    normalized_params = {
+        str(key): value
+        for key, value in dict(params or {}).items()
+        if str(key).lower() not in ("pagenum", "pagesize")
+    }
+    payload = json.dumps(
+        normalized_params,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return "{}:{}".format(api_id, digest)
 
+
+_PAGE_SIZE_PARAM = "pagesize"
+
+
+def _fetch_api_limit_setting(api_id, authtoken, params=None):
+    """携带 authtoken 和业务输入参数查询当前条件下的最优分页大小。"""
+    if not authtoken:
+        raise RuntimeError("未找到 authtoken，请先通过 auth.py 完成认证")
+
+    request_data = {
+        key: value
+        for key, value in dict(params or {}).items()
+        if str(key).lower() not in (_PAGE_SIZE_PARAM, "pagenum")
+    }
+    request_data["authtoken"] = authtoken
+    request_data["apiMain"] = api_id
     return http_post_form(
         f"{BASE_URL}/mall/api_getApiLimitSetting.htm",
-        data={"userKey": user_key, "apiMain": api_id}
+        data=request_data,
     )
 
 
-def _get_api_max_page_size(api_id):
+def _get_api_max_page_size(api_id, params, authtoken):
     """获取接口最大分页；同一进程内优先复用缓存，避免一次运行中重复查询。"""
     cache = _load_page_size_cache()
-    if api_id in cache:
-        return cache[api_id]
+    cache_key = _page_size_cache_key(api_id, params)
+    if cache_key in cache:
+        return cache[cache_key]
 
-    data = _fetch_api_limit_setting(api_id)
+    data = _fetch_api_limit_setting(api_id, authtoken, params)
     max_page_size = _normalize_max_page_size(data.get("maxPageSize") if isinstance(data, dict) else None)
     if max_page_size is None:
         msg = data.get("msg") if isinstance(data, dict) else ""
         raise RuntimeError("查询接口最大分页失败：{}".format(msg or "未返回有效 maxPageSize"))
 
-    cache[api_id] = max_page_size
+    cache[cache_key] = max_page_size
     return max_page_size
 
 
-def _cache_api_max_page_size(api_id, data):
+def _cache_api_max_page_size(api_id, params, data):
     """page-size 子命令查询成功后同步到本进程内缓存。"""
     max_page_size = _normalize_max_page_size(data.get("maxPageSize") if isinstance(data, dict) else None)
     if max_page_size is None:
         return
 
     cache = _load_page_size_cache()
-    cache[api_id] = max_page_size
+    cache_key = _page_size_cache_key(api_id, params)
+    cache[cache_key] = max_page_size
 
 
-def _apply_default_page_size(api_id, params):
+def _apply_default_page_size(api_id, params, authtoken):
     """未显式传 pageSize 时，自动查询并使用该接口的 maxPageSize。"""
     normalized_params = dict(params or {})
     page_size = normalized_params.get("pageSize")
     if page_size is not None and str(page_size).strip() != "":
         return normalized_params
 
-    normalized_params["pageSize"] = str(_get_api_max_page_size(api_id))
+    normalized_params["pageSize"] = str(_get_api_max_page_size(api_id, params, authtoken))
     return normalized_params
 
 
@@ -504,9 +534,8 @@ def cmd_api(api_id, params):
             })
             return
 
-        params = _apply_default_page_size(api_id, params)
         token = ensure_token()
-
+        params = _apply_default_page_size(api_id, params, token)
         request_params = {"authtoken": token}
         request_params.update(params)
 
@@ -627,26 +656,22 @@ def cmd_session(action):
 
 # ── 子命令：page-size（接口分页大小查询）────────────────────────────────
 
-def cmd_page_size(api_id):
+def cmd_page_size(api_id, params=None):
     """
     查询接口分页大小限制
 
-    认证方式：userKey
+    认证方式：authtoken
     """
     _validate_api_id(api_id)
     accepted, error_response = check_terms_accepted()
     if not accepted:
         output_json(error_response)
         return
-    
-    user_key = get_user_key()
-    if not user_key:
-        output_error("未找到 CXDA_USER_KEY，请先通过 auth.py 完成认证")
-        return
 
     try:
-        data = _fetch_api_limit_setting(api_id)
-        _cache_api_max_page_size(api_id, data)
+        token = ensure_token()
+        data = _fetch_api_limit_setting(api_id, token, params)
+        _cache_api_max_page_size(api_id, params, data)
         output_json(data)
     except Exception as e:
         output_error(str(e))
@@ -795,6 +820,7 @@ def main():
         """
     )
     p_ps.add_argument("api_id", help="接口访问标识（API ID）")
+    p_ps.add_argument("params", nargs="*", help="查询参数，格式 key=value（可多个）")
 
     # package
     p_pkg = subparsers.add_parser(
@@ -847,7 +873,8 @@ def main():
         params = parse_params(args.params)
         cmd_api(args.api_id, params)
     elif args.command == "page-size":
-        cmd_page_size(args.api_id)
+        params = parse_params(args.params)
+        cmd_page_size(args.api_id, params)
     elif args.command == "package":
         cmd_package(args.api_main)
     elif args.command == "session":

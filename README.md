@@ -91,6 +91,15 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-09-15 修复分页参数缺失导致积分消耗异常（对齐火山版）
+
+- **问题**：`data_fetcher.py` 的 `_get_api_max_page_size` 调用 `query.py page-size` 时未传业务参数（如 `stkCode`），服务端 maxPageSize 随查询条件变化（传 `stkCode` 时返回 500，不传返回 20），导致分页数量膨胀 25 倍。同时缓存键仅按 `api_id`，跨股票会错误复用同一个值。火山版已修复此问题，原版未同步。
+- **修复**（参照火山版，3 处改动）：
+  - `_get_api_max_page_size` 增加 `params` 参数，命令行追加 `key=value` 传递业务条件
+  - 缓存键改为 `api_id + params` 组合（`"{}:{}".format(api_id, json.dumps(...))`），避免跨股票复用错误值
+  - 两处调用传 `{"stkCode": code}`：`getStkDayQuoByCond-G` 和 `getDStkPriceMidDivByCond-G`
+- **效果**：maxPageSize 从 20 提升到 500（25 倍），API 调用次数和积分消耗大幅下降
+
 ### 2026-07-17 火山终版安全加固合入（客户提供通过审计的完整版本）
 
 火山客户经多轮安全扫描后主动提供最终通过审计的完整代码版本，本次合入。覆盖 8 个源码文件 + 1 个依赖文件，修复 22 项漏洞（按类别去重后 15 大类），严重度分布：CRITICAL × 1 / HIGH × 8 / MEDIUM × 12 / LOW × 3。

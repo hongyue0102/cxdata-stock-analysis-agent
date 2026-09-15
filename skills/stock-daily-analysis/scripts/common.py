@@ -264,7 +264,7 @@ def get_cached_auth() -> dict:
 def check_terms_accepted() -> Tuple[bool, dict]:
     """
     检查用户是否已接受服务协议
-    
+
     Returns:
         (accepted, error_response): accepted=True 时可继续，False 时返回结构化错误
     """
@@ -274,6 +274,15 @@ def check_terms_accepted() -> Tuple[bool, dict]:
         return False, {
             "code": "10500",
             "msg": "用户尚未接受服务协议，请先通过 auth.py terms-check 和 terms-accept 完成协议确认",
+            "status": "terms_not_accepted",
+            "data": "",
+        }
+    # 同时检查是否已完成电话号码鉴权（缓存中有 CXDA_USER_KEY）
+    stored = auth.get("CXDA_USER_KEY", "")
+    if not stored:
+        return False, {
+            "code": "10500",
+            "msg": "尚未完成认证，请先通过 auth.py send-code 和 verify 完成短信鉴权",
             "status": "terms_not_accepted",
             "data": "",
         }
@@ -411,17 +420,9 @@ def get_user_key() -> str:
     """
     获取 CXDA_USER_KEY
 
-    优先级：
-    1. 环境变量 CXDA_USER_KEY（必须匹配 ^[A-Za-z0-9_-]{16,128}$，否则忽略）
-    2. 缓存中的 CXDA_USER_KEY（加密存储，读取时透明解密；老明文自动迁移）
-
-    安全：环境变量取值必须通过 _is_valid_user_key 格式校验，
-    拒绝任意字符串绕过后端鉴权、注入或伪造 userKey。
+    从缓存中读取（加密存储，读取时透明解密；老明文自动迁移）。
+    本版本不支持环境变量鉴权，必须通过 auth.py 短信鉴权获取。
     """
-    env_key = os.environ.get("CXDA_USER_KEY")
-    if env_key and _is_valid_user_key(env_key):
-        return env_key
-
     auth = get_cached_auth()
     stored = auth.get("CXDA_USER_KEY", "")
     if not stored:

@@ -34,7 +34,83 @@ def _sanitize_for_log(value) -> str:
     return _CONTROL_RE.sub(" ", str(value))
 
 
-def _run_query(api_id: str, code: str, page: int, page_size: int = 20) -> Optional[Dict]:
+# 接口最大分页进程内缓存（参照 query.py _PAGE_SIZE_CACHE）
+_PAGE_SIZE_CACHE: Dict[str, int] = {}
+
+
+def _normalize_max_page_size(value) -> Optional[int]:
+    """将 maxPageSize 转成正整数，无法识别时返回 None。参照 query.py 同名函数。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        text = str(value).strip()
+        if text == "":
+            return None
+        number = int(float(text))
+        return number if number > 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _get_api_max_page_size(api_id: str, params: dict = None) -> int:
+    """动态获取接口在当前业务条件下的最大分页数量。
+
+    通过 subprocess 调用 query.py page-size 子命令查询 api_getApiLimitSetting.htm，
+    返回 maxPageSize。服务端 maxPageSize 会随查询条件变化（传 stkCode 时返回 500，
+    不传时返回 20），必须传入业务参数获取最优分页大小。
+    同一进程内优先复用缓存，缓存键按 api_id+params 组合，避免重复查询。
+    """
+    cache_key = "{}:{}".format(api_id, json.dumps(params or {}, sort_keys=True))
+    if cache_key in _PAGE_SIZE_CACHE:
+        return _PAGE_SIZE_CACHE[cache_key]
+
+    cmd = [
+        sys.executable,
+        str(_QUERY_SCRIPT),
+        "page-size",
+        api_id,
+    ]
+    if params:
+        for k, v in params.items():
+            cmd.append("{}={}".format(k, v))
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(_SCRIPT_DIR),
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("query.py page-size 调用超时")
+        raise RuntimeError("查询接口分页上限超时")
+
+    if result.returncode != 0:
+        logger.error(f"query.py page-size 退出码 {result.returncode}, stderr: {_sanitize_for_log(result.stderr[:200])}")
+        raise RuntimeError("查询接口分页上限失败")
+
+    stdout = result.stdout.strip()
+    if not stdout:
+        logger.error("query.py page-size 无输出")
+        raise RuntimeError("查询接口分页上限无响应")
+
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError as e:
+        logger.error(f"query.py page-size 响应解析失败: {_sanitize_for_log(str(e))}")
+        raise RuntimeError("查询接口分页上限响应解析失败")
+
+    max_page_size = _normalize_max_page_size(data.get("maxPageSize") if isinstance(data, dict) else None)
+    if max_page_size is None:
+        msg = data.get("msg") if isinstance(data, dict) else ""
+        logger.error(f"查询接口最大分页失败：{_sanitize_for_log(msg or '未返回有效 maxPageSize')}")
+        raise RuntimeError("查询接口最大分页失败：{}".format(msg or "未返回有效 maxPageSize"))
+
+    _PAGE_SIZE_CACHE[cache_key] = max_page_size
+    return max_page_size
+
+
+def _run_query(api_id: str, code: str, page: int, page_size: int) -> Optional[Dict]:
     """通过 subprocess 调用 query.py api，返回解析后的 dict。"""
     cmd = [
         sys.executable,
@@ -84,7 +160,7 @@ def _run_query(api_id: str, code: str, page: int, page_size: int = 20) -> Option
     return data
 
 
-def _fetch_daily_quote(code: str, page: int, page_size: int = 20) -> Optional[Dict]:
+def _fetch_daily_quote(code: str, page: int, page_size: int) -> Optional[Dict]:
     """获取原始不复权日行情（getStkDayQuoByCond-G）"""
     data = _run_query("getStkDayQuoByCond-G", code, page, page_size)
     if data is None:
@@ -97,7 +173,7 @@ def _fetch_daily_quote(code: str, page: int, page_size: int = 20) -> Optional[Di
     return None
 
 
-def _fetch_fq_quote(code: str, page: int, page_size: int = 20) -> Optional[Dict]:
+def _fetch_fq_quote(code: str, page: int, page_size: int) -> Optional[Dict]:
     """获取前复权日行情（getDStkPriceMidDivByCond-G），仅 OHLC + 均价"""
     data = _run_query("getDStkPriceMidDivByCond-G", code, page, page_size)
     if data is None:
@@ -172,19 +248,27 @@ def get_daily_data(stock_code: str, days: int = 20) -> Optional[Tuple[pd.DataFra
         logger.warning(f"仅支持 A 股，{safe_stock_code} 为 {_sanitize_for_log(market)} 市场代码")
         return None
 
+    # 动态查询接口最大分页（参照 query.py _get_api_max_page_size）
+    try:
+        daily_page_size = _get_api_max_page_size("getStkDayQuoByCond-G", {"stkCode": code})
+        fq_page_size = _get_api_max_page_size("getDStkPriceMidDivByCond-G", {"stkCode": code})
+    except RuntimeError as e:
+        logger.error(f"动态获取分页上限失败：{_sanitize_for_log(str(e))}")
+        return None
+
     # 多页拼接（不复权）
-    pages_needed = max(1, (days + 19) // 20)
+    pages_needed = max(1, (days + daily_page_size - 1) // daily_page_size)
     all_results = []
 
     for page in range(1, pages_needed + 1):
-        data = _fetch_daily_quote(code, page)
+        data = _fetch_daily_quote(code, page, daily_page_size)
         if not data:
             break
         results = data.get('result', [])
         if not results:
             break
         all_results.extend(results)
-        if len(results) < 20:
+        if len(results) < daily_page_size:
             break
 
     if not all_results:
@@ -226,16 +310,17 @@ def get_daily_data(stock_code: str, days: int = 20) -> Optional[Tuple[pd.DataFra
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # 拉取前复权数据（getDStkPriceMidDivByCond-G），按 date 对齐合并到 df
+    fq_pages_needed = max(1, (days + fq_page_size - 1) // fq_page_size)
     fq_results = []
-    for page in range(1, pages_needed + 1):
-        fq_data = _fetch_fq_quote(code, page)
+    for page in range(1, fq_pages_needed + 1):
+        fq_data = _fetch_fq_quote(code, page, fq_page_size)
         if not fq_data:
             break
         results = fq_data.get('result', [])
         if not results:
             break
         fq_results.extend(results)
-        if len(results) < 20:
+        if len(results) < fq_page_size:
             break
 
     if fq_results:
