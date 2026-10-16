@@ -1,16 +1,22 @@
 ---
 name: cxdata-stock-market-information
-description: 存储中国大陆证券交易所股票市场行情信息和上市公司信息考评结果，主要信息包括：一、复权因子与A/B股行情、涨跌幅、最高最低价、换手率、市值及前后复权行情：存储股票复权因子（除权除息日、本次/累计复权因子）；存储A/B股日行情及后复权行情（B股股价换算为人民币），字段包括截止日期、停牌前日、收盘/昨收/开盘/最高/最低价（含后复权）、成交量/额等；存储前复权行情（实际行情日期、前复权收盘/昨收/开盘/最高/最低价、涨跌等）；存储涨跌幅及年化收益率（不复权涨跌，后复权近1周/1月/3月/1年/今年以来/上市至今涨跌幅，近2/3/5年年化收益率等）；存储最高最低价（52周/本周/本月/本年/上市以来最高最低价，含后复权等）；存储换手率（当日、近1周/1月/3月平均、本周/今年以来/上市至今平均换手率，上市以来交易天数等）；存储市值（考虑/不考虑汇率，公司/个股总市值、流通市值，A/B/H股口径等）。二、大宗交易信息披露：存储股票/基金大宗交易统计（股票代码、交易日期、成交均价/量、笔数等）及明细（成交金额、成交价、成交量、买卖营业部等）；三、异动公开信息披露，存储股票和基金因异动（如日涨跌幅偏离值、异常期间累计偏离值、日换手率、三日换手率）披露的异动概要（股票/基金代码、异动类型、成交量/额、涨跌幅、偏离值、换手率等），以及前5名买卖营业部明细（营业部交易方式、排名、名称、买卖合计/买入/卖出金额等）。四、上市公司年度信息披露考评结果：存储股票代码、考评年度、考评结果、考评起始日及截止日。；存储上交所、深交所、北交所、中证指数等发布上市的指数行情信息、指数多周期行情统计、股票指数行情、债券指数行情、股票指数市场表现、债券指数市场表现等。包含指数代码、指数简称、交易日期、昨收盘价、开盘价、成交金额、最高价、最低价、收盘价、成交数量、价格升跌、涨跌幅等维度。；存储上交所、深交所、北交所、中证指数、国证指数等发布上市的指数基本信息、指数成分股。包括上证指数、深证成指、中证500、中证1000等指数，包含指数全称、指数代码、指数简称、指数类别、成分证券类别、编制机构、发布机构、发布日期、基日、基点、上市状态等维度。
-metadata:
-  version: "1.0.9"
-  author: "财新数据"
-  website: "guzhi.io"
-  tags: ["stock-price", "turnover-rate", "exercise-rights", "trading", "stock", "open-price", "low-price", "high-price", "close-price", "index", "basic", "shanghai", "shenzhen", "csi"]
+description: 存储中国大陆证券交易所股票市场行情信息和上市公司信息考评结果，主要信息包括：一、复权因子与A/B股行情、涨跌幅、最高最低价、换手率、市值及前后复权行情：存储股票复权因子（除权除息日、本次/累计复权因子）；存储A/B股日行情及后复权行情（B股股价换算为人民币），字段包括截止日期、停牌前日、收盘/昨收/开盘/最高/最低价（含后复权）、成交量/额等；存储前复权行情（实际行情日期、前复权收盘/昨收/开盘/最高/最低价、涨跌等）；存储涨跌幅及年化收益率（不复权涨跌，后复权近1周/1月/3月/1年/今年以来/上市至今涨跌幅，近2/3/5年年化收益率等）；存储最高最低价（52周/本周/本月/本年/上市以来最高最低价，含后复权等）；存储换手率（当日、近1周/1月/3月平均、本周/今年以来/上市至今平均换手率，上市以来交易天数等）；存储市值（考虑/不考虑汇率，公司/个股总市值、流通市值，A/B/H股口径等）。二、大宗交易信息披露：存储股票/基金大宗交易统计（股票代码、交易日期、成交均价/量、笔数等）及明细（成交金额、成交价、成交量、买卖营业部等）；三、异动公开信息披露，存储股票和基金因异动（如日涨跌幅偏离值、异常期间累计偏离值、日换手率、三日换手率）披露的异动概要（股票/基金代码、异动类型、成交量/额、涨跌幅、偏离值、换手率等），以及前5名买卖营业部明细（营业部交易方式、排名、名称、买卖合计/买入/卖出金额等）。四、上市公司年度信息披露考评结果：存储股票代码、考评年度、考评结果、考评起始日及截止日。；存储上交所、深交所、北交所、中证指数等发布上市的指数行情信息、指数多周期行情统计、股票指数行情、债券指数行情、股票指数市场表现、债券指数市场表现等。包含指数代码、指数简称、交易日期、昨收盘价、开盘价、成交金额、最高价、最低价、收盘价、成交数量、价格升跌、涨跌幅等维度。；存储上交所、深交所、北交所、中证指数、国证指数等发布上市的指数基本信息、指数成分股。包括上证指数、深证成指、中证500、中证1000等指数，包含指数全称、指数代码、指数简称、指数类别、成分证券类别、编制机构、发布机构、发布日期、基日、基点、上市状态等维度。存储A股股票日行情技术指标基础数据，包含MACD、KDJ、BOLL、MA、BIAS、MTM、RSI、量比、强势股指标等维度。
+description_zh: 查询中国大陆股票行情与复权、市值换手、交易异动、大宗交易、信息披露考评、技术指标，以及指数资料、成分和行情。
+description_en: Query mainland Chinese stock prices and adjustments, market capitalization, turnover,trend,unusual and block trades, disclosure ratings, and index profiles, constituents and prices.
+version: "1.0.34"
+author: "财新数据"
+website: "https://yun.ccxe.com.cn"
+tags: ["stock-price", "turnover-rate", "exercise-rights", "trading", "index", "trend"]
+display_name: "股票库-市场信息"
+display_name_en: "cxdata stock market information"
+allowed-tools: Read,Bash
+visibility: "public"
 ---
 
 # cxdata-stock-market-information
 
 > 财新数据官方 Skill，提供接口数据查询与数据整合能力。
+
 
 ## 使用场景
 
@@ -18,7 +24,7 @@ metadata:
 - 用户查询中国大陆上交所、深交所、北交所股票每日行情数据。包含交易日期、前收盘价、开盘价、最高价、最低价、收盘价、成交量、成交额、涨跌额、涨跌幅等维度
 - 用户查询股票大宗交易相关信息。主要信息包括：股票代码、日最高价、大宗交易成交价、买方营业部、卖方营业部、涨跌幅等
 - 用户查询证券因不同异动类型导致的公开信息披露对应的排名前5名买卖营业部明细。主要信息包括：营业部交易方式、交易金额排名、营业部名称、买卖合计金额、买入金额、卖出金额等
-- 用户查询A/B股因不同异动类型导致的公开信息披露，范围涵盖日涨跌幅偏离值、异常期间价格涨跌幅偏离值累计、日换手率、三日换手率异动达到一定限制等。主要信息包括：股票代码、异动类型、成交量、成交金额、涨跌幅、涨跌幅偏离值、换手率等
+- 用户查询A/B股因不同异动类型导致的公开信息披露(龙虎榜)，范围涵盖日涨跌幅偏离值、异常期间价格涨跌幅偏离值累计、日换手率、三日换手率异动达到一定限制等。主要信息包括：股票代码、异动类型、成交量、成交金额、涨跌幅、涨跌幅偏离值、换手率等
 - 用户查询基金因不同异动类型导致的公开信息披露，范围涵盖特别停牌、无价格涨跌幅限制、融资买入占总交易量50%以上、涨跌幅、	换手率达到一定限制等。主要信息包括：基金代码、异动类型、成交量、成交金额、涨跌幅偏离值、换手率等
 - 用户查询上交所、深交所、北交所、中证指数等发布上市的股票类指数行情信息。包含指数代码、指数简称、交易日期、昨收盘价、开盘价、成交金额、最高价、最低价、收盘价、成交数量、价格升跌、涨跌幅等维度
 - 用户查询上交所、深交所、北交所、中证指数、国证指数等发布上市的股票类指数基本信息。包含指数全称、指数代码、指数简称、指数类别、成分证券类别、编制机构、发布机构、发布日期、基日、几点上市状态等维度
@@ -41,6 +47,7 @@ metadata:
 - 用户查询中国大陆上交所、深交所、北交所上市公司按照申万行业分类进行每日行业市值统计数据。包括申万一级行业分类、申万二级行业分类、申万三级行业分类各行业所属上市公司市值统计，包含行业总市值、行业权重等维度
 - 用户查询中国大陆交易所股票每日市场热度。包含每日市盈率中位值、上涨家数占比、估值温度、情绪温度、综合计算市场温度
 - 用户查询股票大宗交易统计相关信息。主要信息包括：股票代码、交易日期、大宗交易成交均价、大宗交易成交量、成交笔数等
+- 用户查询A股股票日行情技术指标基础数据，包含MACD、KDJ、BOLL、MA、BIAS、MTM、RSI、量比、强势股指标等
 
 ---
 
@@ -49,6 +56,10 @@ metadata:
 本 Skill 的命令位于与本文件同级的 `scripts/` 目录，**无需配置任何环境变量**。
 按下文命令执行即可完成认证、查询、分页、套餐额度查询与响应解析。
 
+- **依赖安装**：脚本依赖 `requests` 与 `cryptography`，首次使用前请安装：
+  - macOS / Linux：`python3 -m pip install -r requirements.txt`
+  - Windows PowerShell：`python -m pip install -r requirements.txt`
+  - （`requirements.txt` 与本文件同级；也可 `pip install requests cryptography`）
 - **调用方式**：用你所在平台的 Python（`python` 或 `python3`）直接执行脚本路径即可。
   - macOS / Linux：`python3 ./scripts/query.py ...`
   - Windows PowerShell：`python .\scripts\query.py ...`
@@ -60,50 +71,15 @@ metadata:
 
 ## 首次使用：协议确认与登录认证
 
-> 若 `send-code`、`verify`、业务 `api`、`page-size`、`package` 或 `session summary`
-> 返回 `status: "terms_not_accepted"`，说明尚未完成服务协议确认。
-> 此时停止当前业务调用，按下方「服务协议状态」流程完成协议确认后再继续。
-> **认证前置**：本轮首次业务查询前必须检查协议状态和认证状态。协议未接受、用户未认证、认证失败、
-> 用户要求查看协议全文、或需要向用户展示协议/认证话术时，先阅读 `references/auth-flow.md`，
-> 并严格按其中的话术与原文执行。已认证且协议已接受时无需反复加载该文件。
+业务查询执行 `query.py api`。脚本启动时会依次调用
+`check_terms_accepted()` 与 `ensure_token()`；已接受协议且 token 可用时直接继续业务查询。
 
-**1. 检查服务协议状态：**
+仅在 `api` 返回以下状态时让 LLM 介入：
 
-```bash
-$PYTHON "$AUTH_SCRIPT" terms-check
-```
-- `terms_accepted: true` → 进入第 2 步
-- `terms_accepted: false` → **必须先向用户原文展示下列三份协议并请求确认**（展示时不得修改表述样式或内容，详见 `references/auth-flow.md`「服务协议确认」）：
+- `status: "terms_not_accepted"`：停止业务调用，读取 `references/auth-flow.md`，按其中原文展示协议并完成接受或拒绝流程。
+- `status: "authentication_required"`：读取 `references/auth-flow.md`，引导用户通过手机号验证码认证。
 
-  > 继续使用本 Skill 即表示您已阅读并同意以下协议的全部内容 ：
-  > - [《财新数据隐私政策》](https://cdp.ccxe.com.cn/clause/privacy)
-  > - [《财新数据用户服务协议》](https://cdp.ccxe.com.cn/clause/service)
-  > - [《财新数据付费用户服务协议》](https://cdp.ccxe.com.cn/clause/vip)
-  >
-  > 如果同意请输入您的手机号，我来为您发送验证码完成账号认证。
-
-  展示后按用户回应处理：
-  - 用户输入手机号（即视为同意）→ 执行 `$PYTHON "$AUTH_SCRIPT" terms-accept`，随后进入第 2 步发送验证码
-  - 用户输入「查看全文」→ 用系统默认浏览器打开上述协议链接，逐条展示后重新询问是否同意
-  - 用户明确拒绝 → 执行 `$PYTHON "$AUTH_SCRIPT" terms-decline`，告知无法使用服务并结束对话
-
-**2. 检查认证状态：**
-
-```bash
-$PYTHON "$AUTH_SCRIPT" status
-```
-- `authenticated: true` → 已认证，可直接查询数据
-- `authenticated: false` → 按 `references/auth-flow.md`「认证流程」章节，引导用户通过手机号验证码登录：
-
-```bash
-echo '{"phone":"<手机号>"}' | $PYTHON "$AUTH_SCRIPT" send-code
-echo '{"phone":"<手机号>","code":"<验证码>"}' | $PYTHON "$AUTH_SCRIPT" verify
-```
-
-> 手机号与验证码通过 stdin（JSON）传入，不通过命令行参数，避免暴露在进程列表（`ps aux`）。
-
-> **安全提示**：`status` 输出的 `CXDA_USER_KEY` 已脱敏（仅显示前4后4字符），不要向用户展示或记录该字段。
-> 协议接受状态与登录密钥持久化在本地共享缓存中，同一设备的所有财新数据 Skill 共享，无需重复认证。完整说明见 `references/auth-flow.md`。
+认证完成后直接重试原命令。协议接受状态与登录密钥会持久化在本地共享缓存中，同一设备的所有财新数据 Skill 共享。
 
 ---
 
@@ -111,42 +87,51 @@ echo '{"phone":"<手机号>","code":"<验证码>"}' | $PYTHON "$AUTH_SCRIPT" ver
 
 当本 Skill 被触发后，按以下唯一主流程执行：
 
-1. **确认协议与认证状态**：本轮首次业务查询前执行 `terms-check` 和 `status`。未接受协议或未认证时，按「首次使用：协议确认与登录认证」完成前置流程；用户拒绝协议、认证失败且无法继续时停止，不调用业务接口。
+1. **选择最小必要接口**：在下方「接口清单」中选定目标 API_ID，并先阅读其接口文档（接口清单「接口文档」列，路径形如 `references/{API_ID}.md`）。优先选择能直接满足问题的最少接口，不要预先串行调用所有可能相关的接口。
 
-2. **选择最小必要接口**：在下方「接口清单」中选定目标 API_ID，并先阅读其接口文档（接口清单「接口文档」列，路径形如 `references/{API_ID}.md`）。优先选择能直接满足问题的最少接口，不要预先串行调用所有可能相关的接口。
+2. **校验入参与前置依赖**：严格按接口文档定义的入参字段组织参数；不得使用文档中不存在的接口或字段。缺少必填入参时，优先向用户询问；只有接口文档明确存在前置依赖、且当前查询目标需要补齐该字段时，才调用前置接口。
 
-3. **校验入参与前置依赖**：严格按接口文档定义的入参字段组织参数；不得使用文档中不存在的接口或字段。缺少必填入参时，优先向用户询问；只有接口文档明确存在前置依赖、且当前查询目标需要补齐该字段时，才调用前置接口。
-
-4. **（按需）确认分页大小**：若结果可能超过默认条数、需要大量数据或较长时间段数据，先按下文「分页获取」查询该接口的 maxPageSize，再设置 `pageNum` / `pageSize`。
-
-5. **开始积分会话**：本轮首次业务 `api` 调用前执行一次 `$PYTHON "$QUERY_SCRIPT" session start`，重置本轮积分账本。
-
-6. **调用统一查询工具**
+3. **调用统一编排工具**
 
 ```bash
 $PYTHON "$QUERY_SCRIPT" api <API_ID> key=value [key=value ...]
 ```
-- 所有业务接口统一使用 `api` 子命令，参数采用 `key=value` 格式
-- 命令输出为格式化 JSON，无需手动处理 token 或解码响应
-- 若输出 `status: "confirmation_required"`，说明本轮会话已有 50 次成功计费接口调用。必须暂停并询问用户是否确认继续调用，用户确认后先执行 `$PYTHON "$QUERY_SCRIPT" session confirm`，再继续调用 `api`。
 
-7. **解析结果与单次消耗**：将输出的 JSON 数据解析后呈现给用户；每次成功且 `consumePoints > 0` 时，按「积分消耗提示」播报本次消耗。
+已确定这是最后一个业务调用、需要在同一响应中取得套餐额度时，加 `--finalize`。普通中间调用不要加：
 
-8. **最终汇总**：当已经获得足够数据并准备给用户最终答案时，视为本轮查询完成；如果本轮发生过业务接口调用，执行 `$PYTHON "$QUERY_SCRIPT" session summary`，按「积分消耗提示」汇总本轮消耗和套餐剩余额度。
+```bash
+$PYTHON "$QUERY_SCRIPT" api <API_ID> key=value --finalize
+```
 
-9. **失败停止边界**：认证失败、权限不足、缺少关键入参、前置接口无结果、接口返回错误或输出为空时，不要盲目重复调用；先按「故障排除」说明原因，必要时向用户补充询问。
+`query.py` 会在每次调用时自动应用平台策略；关闭计费信息展示时，`--finalize` 不查询套餐，也不附加用量汇总。
+
+- `api` 参数采用 `key=value`。脚本自动完成协议检查、token、默认 `pageSize`、会话创建、记账和响应解码。
+- 同一会话内，相同 API 和相同查询条件只在第一次缺省 `pageSize` 时查询最优分页上限；不同查询条件分别计算，后续翻页和后续 CLI 进程复用会话账本中的缓存。新会话重新查询。
+- 本取数型 Skill 不定义跨接口调用图、上游字段映射、分页推进或断点恢复策略。需要多个业务接口的分析任务，应由分析型 Skill 统一编排并逐次调用各依赖 Skill 的 `query.py api`。
+- 不要调用 `terms-check`、`status` 或 `session start`。仅当本轮最后一次 `api` 返回
+  `_cxda_policy.show_billing_info=true` 且此前未使用 `--finalize` 时，最终答复前才调用一次
+  `session summary` 获取套餐额度；策略为 `false` 时不要调用。
+- 若输出 `terms_not_accepted` 或 `authentication_required`，按「首次使用：协议确认与登录认证」处理。认证后重试原 `api` 命令。
+- 每次 `api` 返回后先读取 `_cxda_policy.show_billing_info`，不得沿用更早响应中的状态。
+- 仅当 `_cxda_policy.show_billing_info=true` 且 `api.status` 为 `confirmation_required` 时，才暂停并询问用户。确认后执行 `$PYTHON "$QUERY_SCRIPT" session confirm`，再重试当前 `api` 命令。
+
+4. **解析结果与策略**：`api` 的业务结果位于顶层。每次响应都以 `_cxda_policy.show_billing_info` 为当前唯一有效策略：
+   - `true`：从 `_cxda_session` 读取当前会话累计消耗；只从 `packages_included=true` 的最终汇总读取套餐额度。
+   - `false`：脚本已移除 `consumePoints` 与 `_cxda_session`，并停用 50 次调用确认；不要输出或推断积分、套餐、调用次数，不要根据本轮更早的结果补充这些信息。
+
+5. **失败停止边界**：认证失败、权限不足、缺少关键入参、前置接口无结果、接口返回错误或输出为空时，不要盲目重复调用；先按「故障排除」说明原因，必要时向用户补充询问。
 
 ---
 
-## 积分消耗提示（**会话调用了接口时必须执行**）
+## 跨 Skill 平台策略（每次响应必须重新判断）
 
-> 用于让用户清楚每次调用的积分消耗与整轮会话的累计消耗。积分明细从命令输出读取，会话统计以 `session summary` 返回为准。
+计费信息展示由部署平台决定，不是用户偏好。策略由脚本自动处理；Skill 和 LLM 只读取每次业务响应中的
+`_cxda_policy.show_billing_info`，无需判断策略来源。无论当前 Skill 是直接回答，还是被上级
+分析型 Skill 调用，都必须逐响应判断，不得缓存旧值，也不要向用户复述 `_cxda_policy` 内部字段。
 
-**会话开始**（本轮首次业务 `api` 调用前，执行一次以重置积分账本）：
+## 积分消耗提示（仅当 `show_billing_info=true` 时执行）
 
-```bash
-$PYTHON "$QUERY_SCRIPT" session start
-```
+> `api` 会隐式创建或续用当前会话。普通 `api` 只附加本地滚动汇总，不请求套餐接口；`api --finalize` 或 `session summary` 才查询一次套餐。
 
 **超过 50 次调用确认**：当 `api` 返回 `status: "confirmation_required"` 时，必须先向用户说明「本轮会话已成功调用 50 次计费接口，继续调用消耗积分可能超出预期」，并询问是否继续。只有用户明确确认后，才执行：
 
@@ -154,80 +139,70 @@ $PYTHON "$QUERY_SCRIPT" session start
 $PYTHON "$QUERY_SCRIPT" session confirm
 ```
 
-执行成功后可继续原业务查询；用户未确认或拒绝时停止继续调用接口。
+执行成功后重试当前业务查询。用户未确认或拒绝时停止继续调用接口。
 
 **每次调用后播报**：从 `api` 返回的 JSON 中读取消耗字段（成功时 `code` 为 `10000`，消耗字段为 `consumePoints`）：
 - 成功且 `consumePoints > 0` → 告知用户：「已调用接口 {接口名称}，本次消耗 {consumePoints} 积分。」
 - 成功但消耗为 0 → 正常返回数据，**不提积分消耗**。
 - 失败（`code != 10000`）→ 按故障排除处理，**不提积分消耗**（失败不计费）。
 
-**会话结束时汇总**（准备给用户最终答案前，如果本轮发生过业务接口调用，必须进行汇总）：
+**会话汇总**：在最终答复前确保只执行一种收尾方式：
 
-```bash
-$PYTHON "$QUERY_SCRIPT" session summary
-```
+- 已知最后一次单接口：给该次 `api` 加 `--finalize`。
+- 已执行一个或多个普通 `api`：最终补充执行一次 `$PYTHON "$QUERY_SCRIPT" session summary`。
+
+然后从 `packages_included=true` 的 `_cxda_session` 读取：
+
 - 读取 `call_count`（会话调用接口数量）与 `total_consumed`（本次会话累计消耗），告知用户：「本次会话共调用 {call_count} 次接口，累计消耗 {total_consumed} 积分。」
-- 同时读取 `packages` 逐套餐播报剩余额度，按「套餐展示模板」展示总量积分与每日额度。
+- 同时读取 `packages`，在准备最终答案时逐套餐播报剩余额度，按「套餐展示模板」展示总量积分与每日额度。
 - 不同套餐的剩余积分不能混合合计，不要输出总剩余额度。
 - 如果 `package_error` 非空，只汇总本次会话调用次数和累计消耗，并提示套餐清单获取失败。
-- 消耗提示与套餐剩余额度提示必须同时进行，且必须在会话结束时进行汇总提示**不允许在会话中途或调用接口后单独提示套餐剩余额度**。
+- 套餐剩余额度只在准备最终答案时展示，不要在中间调用后单独提示。
 
-> 仅「成功且消耗 > 0」的调用计入会话统计；失败与 0 消耗均不计入。当已经获得足够数据并准备回复用户时，视为本轮查询完成，并以 `session summary` 汇总本轮消耗与套餐剩余额度。
+> 仅「成功且消耗 > 0」的调用计入会话统计；失败与 0 消耗均不计入。
 
-`session summary` 固定返回示例：
+最终汇总中的 `_cxda_session` 固定结构示例（普通中间 `api` 的
+`packages_included=false`、`packages=[]`）：
 
 ```json
 {
-  "success": true,
-  "session_start": "2026-06-09 14:00:00",
-  "call_count": 2,
-  "total_consumed": 12,
-  "calls": [
-    {
-      "time": "2026-06-09 14:01:10",
-      "api_id": "getStkBasicInfoByCond-K",
-      "consumed": 5
-    },
-    {
-      "time": "2026-06-09 14:02:10",
-      "api_id": "getCooWineCateDailQuoByWineName",
-      "consumed": 7
-    }
-  ],
-  "package_count": 1,
-  "packages": [
-    {
-      "source_type": "人工添加",
-      "package_name": "测试套餐(高)",
-      "balance": 1000,
-      "total_money": 1000,
-      "integral": "1000/1000",
-      "day_balance": 1000,
-      "day_money": 1000,
-      "valid_end": "2027-06-30 13:56:05"
-    }
-  ],
-  "package_error": null
+  "code": "10000",
+  "consumePoints": 7,
+  "_cxda_session": {
+    "session_start": "2026-06-09 14:00:00",
+    "call_count": 2,
+    "total_consumed": 12,
+    "packages_included": true,
+    "calls": [
+      {
+        "time": "2026-06-09 14:01:10",
+        "api_id": "getStkBasicInfoByCond-K",
+        "consumed": 5
+      },
+      {
+        "time": "2026-06-09 14:02:10",
+        "api_id": "getCooWineCateDailQuoByWineName",
+        "consumed": 7
+      }
+    ],
+    "package_count": 1,
+    "packages": [
+      {
+        "package_name": "测试套餐(高)",
+        "balance": 1000,
+        "total_money": 1000,
+        "integral": "1000/1000",
+        "day_balance": 1000,
+        "day_money": 1000,
+        "valid_end": "2027-06-30 13:56:05"
+      }
+    ],
+    "package_error": null
+  }
 }
 ```
 
----
-
-## 默认分页（强约束）
-当用户不主动提出分页参数需求时，必须优先使用references中接口的默认分页参数
-
-## 分页获取（按需）
-
-每个接口允许返回的最大条数（maxPageSize）不同。**当查询结果可能超过默认条数、需要获取大量数据或较长时间段的数据时，必须先查询该接口的最大 pageSize，再用 pageSize 参数指定返回条数，否则数据会被截断。**
-
-```bash
-$PYTHON "$QUERY_SCRIPT" page-size <API_ID>
-```
-返回示例：`{"msg":"请求成功","code":"10000","maxPageSize":100}`，此时调用接口时可传 `pageSize=100`。
-
----
-
-## 套餐额度查询
+## 套餐额度查询（仅当 `show_billing_info=true` 时执行）
 
 查询用户已开通套餐及剩余额度时，使用：
 
@@ -239,14 +214,13 @@ $PYTHON "$QUERY_SCRIPT" package --api-main <API_ID>
 套餐展示模板（字段为空、`null` 或 `-` 时不展示对应行或片段）：
 
 ```text
-{package_name}（来源：{source_type}）
+{package_name}
 总量积分：剩余 {balance} / 总积分 {total_money}
 每日额度：每日剩余 {day_balance} / 每日积分 {day_money}
 到期时间：{valid_end}
 ```
 
 展示规则：
-- `source_type` 为空时，不展示「来源」。
 - `balance`、`total_money` 都有值时展示为「总量积分：剩余 {balance} / 总积分 {total_money}」；只有一个字段有值时，只展示该字段。
 - `day_balance`、`day_money` 都有值时展示为「每日额度：每日剩余 {day_balance} / 每日积分 {day_money}」；只有一个字段有值时，只展示该字段。
 - `valid_end` 为空时，不展示到期时间。
@@ -265,7 +239,6 @@ $PYTHON "$QUERY_SCRIPT" package --api-main <API_ID>
       "package_id": 92,
       "package_name": "测试套餐(高)",
       "package_code": "TEST_PACKAGE",
-      "source_type": "人工添加",
       "status": "2",
       "valid_start": "2026-06-08 13:56:02",
       "valid_end": "2027-06-30 13:56:05",
@@ -290,7 +263,7 @@ $PYTHON "$QUERY_SCRIPT" package --api-main <API_ID>
 | 交易所基金日交易信息-通用 | ./references/getStatTradeDateMain1ByCond-G.md | getStatTradeDateMain1ByCond-G | 存储基金因不同异动类型导致的公开信息披露，范围涵盖特别停牌、无价格涨跌幅限制、融资买入占总交易量50%以上、涨跌幅、	换手率达到一定限制等。主要信息包括：基金代码、异动类型、成交量、成交金额、涨跌幅偏离值、换手率等。 |
 | 交易所日公开信息明细-通用 | ./references/getStatTradeDateSubByCond-G.md | getStatTradeDateSubByCond-G | 存储证券因不同异动类型导致的公开信息披露对应的排名前5名买卖营业部明细。主要信息包括：营业部交易方式、交易金额排名、营业部名称、买卖合计金额、买入金额、卖出金额等。 |
 | 交易所股票多周期行情-通用 | ./references/getStkRoundQuoByCond-G.md | getStkRoundQuoByCond-G | 存储中国大陆上交所、深交所、北交所股票多周期行情数据。包括周、季度、半年度、年度等周期，包含交易日期、前收盘价、开盘价、最高价、最低价、收盘价、成交量、成交额等维度。 |
-| 交易所股票日交易信息-通用 | ./references/getStatTradeDateMainByCond-G.md | getStatTradeDateMainByCond-G | 存储A/B股因不同异动类型导致的公开信息披露，范围涵盖日涨跌幅偏离值、异常期间价格涨跌幅偏离值累计、日换手率、三日换手率异动达到一定限制等。主要信息包括：股票代码、异动类型、成交量、成交金额、涨跌幅、涨跌幅偏离值、换手率等。 |
+| 交易所股票日交易信息-通用 | ./references/getStatTradeDateMainByCond-G.md | getStatTradeDateMainByCond-G | 存储A/B股因不同异动类型导致的公开信息披露(龙虎榜)，范围涵盖日涨跌幅偏离值、异常期间价格涨跌幅偏离值累计、日换手率、三日换手率异动达到一定限制等。主要信息包括：股票代码、异动类型、成交量、成交金额、涨跌幅、涨跌幅偏离值、换手率等。 |
 | 交易所股票日行情-通用 | ./references/getStkDayQuoByCond-G.md | getStkDayQuoByCond-G | 存储中国大陆上交所、深交所、北交所股票每日行情数据。包含交易日期、前收盘价、开盘价、最高价、最低价、收盘价、成交量、成交额、涨跌额、涨跌幅等维度。 |
 | 公司信息披露考评-通用 | ./references/getDComInfoDiscEvaByCond-G.md | getDComInfoDiscEvaByCond-G | 存储上市公司年度信息披露考评结果。主要信息包括：股票代码、考评年度、考评结果、考评起始日、考评截止日等。 |
 | 指数多周期行情-通用 | ./references/getIndRoundQuoByCond-G.md | getIndRoundQuoByCond-G | 存储上交所、深交所、北交所、中证指数等发布上市的指数多周期行情信息。包括周、月、季、半年、年度等周期。包含指数代码、指数简称、交易日期、昨收盘价、开盘价、成交金额、最高价、最低价、收盘价、成交数量、价格升跌、涨跌幅等维度。 |
@@ -314,19 +287,22 @@ $PYTHON "$QUERY_SCRIPT" package --api-main <API_ID>
 | 股票特别提示主表-通用 | ./references/getStkSpeTipsMainByCond-G.md | getStkSpeTipsMainByCond-G | 存储上市公司因各类重大事项对外披露的特别提示信息，涵盖交易、上市状态、分红、融资、信息披露、股份流通等多类场景，是了解上市公司重大变动、规避投资风险的重要基础。主要信息包括：证券代码、发布日期、特别提示内容、事件起始日期、特别提示分类代码等。 |
 | 行业市值权重-通用 | ./references/getInduValueWeightByCond-G.md | getInduValueWeightByCond-G | 存储中国大陆上交所、深交所、北交所上市公司按照申万行业分类进行每日行业市值统计数据。包括申万一级行业分类、申万二级行业分类、申万三级行业分类各行业所属上市公司市值统计，包含行业总市值、行业权重等维度。 |
 | 行业涨跌幅-通用 | ./references/getInduDayQuoByCond-G.md | getInduDayQuoByCond-G | 存储中国大陆上交所、深交所、北交所上市公司按照申万行业分类进行每日行业涨跌幅统计数据。包括申万一级行业分类、申万二级行业分类、申万三级行业分类各行业所属上市公司市值统计，包含行业日涨跌幅、近1周涨跌幅、近1月涨跌幅、近3月涨跌幅、近6月涨跌幅、近1年涨跌幅、等维度。 |
-| 指数信息表-通用 | ./references/getDIndInfoByCond-G.md | getDIndInfoByCond-G | 存储上交所、深交所、北交所、中证指数、国证指数等发布上市的指数基本信息。包括上证指数、深证成指、中证500、中证1000等指数，包含指数全称、指数代码、指数简称、指数类别、成分证券类别、编制机构、发布机构、发布日期、基日、几点上市状态等维度。 |
-| 证券基本信息-通用 | ./references/getPubSecCodeByCond-G.md | getPubSecCodeByCond-G | 存储各类证券产品及其发行主体、上市状态、市场归属等进行统一标识与规范记录的基本信息，是连接发行机构与资本市场的关键基础数据，广泛用于证券交易、估值核算、信息披露、监管统计与投研分析等场景。主要信息包括：证券统一编码、证券代码、证券简称、证券全称、公司名称、证券大类型、证券市场、证券市场所属国家/地区、上市日期、退市日期、上市状态、上市板块、ISIN代码等。 |
+| 股票行情技术指标表-通用 | ./references/getStkDayQuoTrendByCond-G.md | getStkDayQuoTrendByCond-G | 存储A股股票日行情技术指标基础数据，包含MACD、KDJ、BOLL、MA、BIAS、MTM、RSI、量比、强势股指标等 |
+| 股票基本信息-批量 | ./references/getStkBasicInfoByCond-P.md | getStkBasicInfoByCond-P | 存储中国大陆证券交易所发行的股票基本信息，范围涵盖沪深主板、科创板、创业板、北交所、新三板、两网及退市公司股票。主要信息包括：股票代码、交易简称、股票类型、证券市场、上市状态、上市板块、上市日期、退市日期、ISIN_CODE以及变更前或转板前股票代码等。 |
 | 股票基本信息-通用 | ./references/getStkBasicInfoByCond-G.md | getStkBasicInfoByCond-G | 存储中国大陆证券交易所发行的股票基本信息，范围涵盖沪深主板、科创板、创业板、北交所、新三板、两网及退市公司股票。主要信息包括：股票代码、交易简称、股票类型、证券市场、上市状态、上市板块、上市日期、退市日期、ISIN_CODE以及变更前或转板前股票代码等。 |
+| 机构基本信息-ES | ./references/getPubOrgInfoByCond-ES.md | getPubOrgInfoByCond-ES | 通过机构名称、简称、英文名模糊检索获取机构全称、机构编码 |
+| 机构基本信息-通用 | ./references/getPubOrgInfoByCond-G.md | getPubOrgInfoByCond-G | 存储机构在注册登记时向市场监督管理部门申报并对外公示的核心信息，是了解一家机构基本情况的重要依据，机构范围涵盖国内企业、政府/事业单位、银行、证券公司、保险公司、会计师/律师事务所、财新新闻热点企业、个体工商户、社会组织等。主要信息包括：企业名称、统一社会信用代码、法定代表人、负责人、注册资本、成立日期、核准日期、注册地址、经营范围、登记状态、行业分类等。 |
 
 ## 字段与调用约定
 
 - **相同含义字段说明**：ORG_UNI_CODE==COM_UNI_CODE；STK_UNI_CODE==BOND_UNI_CODE；如无明确说明股票代码不需要携带 SH、HK 等交易所代码。
 - **接口输入字段不明确**：接口输入参数是 ORG_UNI_CODE、STK_UNI_CODE 等参数时可以先通过对应的机构信息、股票信息基础接口调用尝试获取，获取不到时反馈并停止。
-- **多接口查询边界**：一次只调用当前问题所需的最小接口集合。除非接口文档明确要求，或当前接口缺少必填入参，否则不要为了“可能有用”而调用上游或同类接口。
+- **取数边界**：一次只调用当前问题所需的最小接口集合。除非接口文档明确要求，或当前接口缺少必填入参，否则不要为了“可能有用”而调用上游或同类接口；复杂跨接口流程由分析型 Skill 编排。
 
 ## 故障排除
 
-- **未认证 / 调用失败**：执行 `$PYTHON "$AUTH_SCRIPT" status` 确认认证状态；未认证时按 `references/auth-flow.md` 完成协议确认与登录，并确认网络连接正常。
+- **参数命名：接口文档定义大写下划线（如 STK_CODE），实际调用必须用小驼峰（如 stkCode），否则报错─10091
+- **未认证 / 调用失败**：`api` 返回相应 `status` 时，按 `references/auth-flow.md` 完成协议确认与登录后直接重试原命令；不要额外执行 `terms-check` 或 `status`。其他失败先检查返回消息与网络连接。
 - **输出为空**：确认输入参数是否正确，检查 API_ID 是否匹配查询类型。
 - **权限问题**：接口返回无权限或者权限到期时，提示用户前往 `https://yun.ccxe.com.cn/` 联系客服。
 - **套餐、积分问题**：返回套餐到期、积分不足、没有套餐、套餐渠道受限等情况时，提示用户前往`https://store.ccxe.com.cn/`财新数据商城购买套餐

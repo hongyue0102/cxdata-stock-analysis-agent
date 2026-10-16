@@ -1,6 +1,7 @@
 # 认证流程详细说明
 
 > 本文件由 SKILL.md 主流程按需引用，不可独立执行。
+> 仅当 `query.py api` 返回 `terms_not_accepted` 或 `authentication_required` 时读取。
 
 ---
 
@@ -13,15 +14,9 @@
 - [《财新数据用户服务协议》](https://cdp.ccxe.com.cn/clause/service)
 - [《财新数据付费用户服务协议》](https://cdp.ccxe.com.cn/clause/vip)
 
-**协议检查命令：**
+**触发条件：**
 
-```bash
-$PYTHON "$AUTH_SCRIPT" terms-check
-```
-
-**返回结果：**
-- `terms_accepted: true` → 用户已接受，可继续认证流程
-- `terms_accepted: false` → 用户未接受，需要引导用户阅读并确认
+`query.py api` 已在脚本内检查协议。只有返回 `status: "terms_not_accepted"` 时，才需要引导用户阅读并确认；已接受时脚本会直接继续，无需 LLM 检查。
 
 **协议未接受时的处理流程：**
 
@@ -47,7 +42,7 @@ $PYTHON "$AUTH_SCRIPT" terms-check
 │   → 用户输入手机号即视为同意，跳过询问直接发送验证码                                  │
 │                                                                              │
 │  4. 用户明确拒绝后执行：                                                         │
-│   $PYTHON "$AUTH_SCRIPT" terms-decline                                       │
+│   $PYTHON "$AUTH_SCRIPT" terms-decline --yes                                 │
 │   → 告知用户无法使用服务，结束对话                                                │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -67,28 +62,14 @@ $PYTHON "$AUTH_SCRIPT" terms-check
 
 ## 认证状态检查
 
-> 本轮首次业务查询前必须检查用户认证状态，确认 CXDA_USER_KEY 是否有效。普通已认证查询不需要重复展示认证话术。
-
-**状态检查命令：**
-
-```bash
-$PYTHON "$AUTH_SCRIPT" status
-```
-
-**返回结果：**
-- `authenticated: true` → 用户已认证，可继续使用功能
-- `authenticated: false` → 用户未认证，需要引导完成认证流程
-
-**已认证时**：继续执行 SKILL.md 的主流程。`status` 输出的 `CXDA_USER_KEY` 已脱敏，仅用于确认认证状态；不要向用户展示、复述或记录该字段。
-
-**未认证时**：引导用户完成认证：
+`query.py api` 已在脚本内调用 `ensure_token()`。只有返回 `status: "authentication_required"` 时才引导用户完成认证：
 
 ```
 您还未完成财新数据认证，需要先验证手机号才能使用数据接口。
 请告诉我您的手机号，我来帮您发送验证码。
 ```
 
-按如下认证流程完成登录，然后重新执行 status 确认认证状态。
+按如下认证流程完成登录，然后直接重试原 `query.py api` 命令。
 
 > **重要：**认证成功后，`CXDA_USER_KEY` 会持久化存储在本地缓存中
 > （`~/.cxda-cache/.shared/cxda_auth.json`），同一设备上的所有 CXDA Skill 共享此认证状态，
@@ -103,8 +84,6 @@ $PYTHON "$AUTH_SCRIPT" status
 ```bash
 echo '{"phone":"<手机号>"}' | $PYTHON "$AUTH_SCRIPT" send-code
 ```
-
-> 手机号通过 stdin（JSON）传入，不通过命令行参数，避免暴露在进程列表（`ps aux`）。
 
 **输出 JSON 字段：**
 - `code`：后端返回码，`10000` 表示成功，`10500` 表示失败
@@ -126,8 +105,6 @@ echo '{"phone":"<手机号>"}' | $PYTHON "$AUTH_SCRIPT" send-code
 echo '{"phone":"<完整手机号>","code":"<4-6位验证码>"}' | $PYTHON "$AUTH_SCRIPT" verify
 ```
 
-> 手机号与验证码通过 stdin（JSON）传入，不通过命令行参数，避免暴露在进程列表（`ps aux`）。
-
 **输出 JSON 字段：**
 - `code`：后端返回码，`10000` 表示成功，`10500` 表示失败
 - `msg`：后端返回消息；失败原因直接读取该字段
@@ -138,7 +115,7 @@ echo '{"phone":"<完整手机号>","code":"<4-6位验证码>"}' | $PYTHON "$AUTH
 ✅ 认证成功！您现在可以使用财新数据接口了。
 ```
 
-验证成功后，重新执行 status 确认认证状态。
+验证成功后，直接重试原 `query.py api` 命令。
 
 **失败 →** 保留后端 `code/msg/data` 结构；直接按后端 `msg` 告知用户。验证码错误或失效时最多引导用户重新发送或重新输入；不要在没有新验证码或新手机号的情况下连续重复调用。
 
@@ -165,8 +142,8 @@ Agent 处理失败时只读取并转述 `msg`，不要自行归类或改写后�
 ```json
 {
   "terms_accepted": true,
-  "CXDA_USER_KEY": "xxxxxxxx",
-  "authtoken": "xxxxxxxx",
+  "CXDA_USER_KEY": "ENCv1:...",
+  "authtoken": "ENCv1:...",
   "authtoken_expire": "2026-06-03 15:30:00",
   "phone_masked": "138****5678",
   "authed_at": 1748928000
@@ -174,8 +151,8 @@ Agent 处理失败时只读取并转述 `msg`，不要自行归类或改写后�
 ```
 
 - **terms_accepted**：用户是否已接受服务协议，同一设备后续使用无需重复确认
-- **CXDA_USER_KEY**：用户密钥，所有 CXDA Skill 共享，调用数据接口时使用
-- **authtoken**：接口访问令牌，由 `common.py` 自动管理（300秒缓存，过期自动刷新）
+- **CXDA_USER_KEY**：历史明文用户继续保持明文，已有密文继续保持密文；本地尚无 userKey 的新用户首次认证时使用 ENCv1 密文，读取密文时透明解密
+- **authtoken**：跟随已有 CXDA_USER_KEY 的存储模式；新用户使用密文，历史明文用户继续使用明文，由 `common.py` 自动管理（300秒缓存，过期自动刷新）
 - **phone_masked**：脱敏手机号，用于展示认证状态
 - **authed_at**：认证时间戳（Unix 时间）
 

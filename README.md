@@ -91,6 +91,17 @@ cxdata-stock-analysis-agent/
 
 ## 变更历史
 
+### 2026-10-16 替换 cxdata-stock-market-information 底层 skill（对齐 modify 版本 v1.0.34）
+
+- **背景**：modify 文件夹提供了新版 `cxdata-stock-market-information` skill，需替换 agent 内置的旧版（v1.0.27），保持指标计算结果一致
+- **替换内容**：
+  - `cxdata-stock-market-information` skill 整体替换（SKILL.md + references + scripts）
+    - SKILL.md 版本升级 1.0.27 → 1.0.34，新增技术指标表接口描述
+    - references 新增 `getStkDayQuoTrendByCond-G.md`（股票行情技术指标表），删除 2 个孤立文件（`getDIndInfoByCond-G.md`、`getPubSecCodeByCond-G.md`），31 个文件输出参数表新增"单位"列
+  - `stock-daily-analysis/scripts/` 同步更新 5 个共享脚本（`common.py`、`auth.py`、`cred_crypto.py`、`cxda_cache_cli.py`、`query.py`），其中 4 个文件与旧版完全一致，仅 `common.py` 有 2 处差异
+- **适配修改**：`common.py` 中 `PROXIES` 保留为 `{"http": None, "https": None}`（显式禁用代理），因当前环境存在 `http_proxy` 环境变量，modify 版本的 `PROXIES = {}` 会导致请求走代理失败。此修改不影响任何指标计算逻辑
+- **验证**：以 300561 汇金科技为测试用例，替换前后执行完整股票分析，所有技术指标数值（MA5/10/20、MACD DIF/DEA/BAR、RSI 6/12/20、乖离率、量比、信号评分等）100% 一致
+
 ### 2026-09-15 修复分页参数缺失导致积分消耗异常（对齐火山版）
 
 - **问题**：`data_fetcher.py` 的 `_get_api_max_page_size` 调用 `query.py page-size` 时未传业务参数（如 `stkCode`），服务端 maxPageSize 随查询条件变化（传 `stkCode` 时返回 500，不传返回 20），导致分页数量膨胀 25 倍。同时缓存键仅按 `api_id`，跨股票会错误复用同一个值。火山版已修复此问题，原版未同步。

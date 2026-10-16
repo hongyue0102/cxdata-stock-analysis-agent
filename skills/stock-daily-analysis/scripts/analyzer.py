@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -19,36 +18,35 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_QUERY_SCRIPT = _SCRIPT_DIR / "query.py"
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+import query as _query_mod
 
 
 def _session_start():
-    """调用 query.py session start，重置本轮积分账本。
-
-    规范要求：本轮首次业务调用前执行一次，确保积分记账从0开始、
-    会话统计以 session summary 返回为准（不依赖 AI 自行统计消耗）。
-    """
+    """重置本轮积分账本（直接函数调用，不再 subprocess）"""
     try:
-        cmd = [sys.executable, str(_QUERY_SCRIPT), "session", "start"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=str(_SCRIPT_DIR))
-        if result.returncode != 0:
-            logger.warning(f"session start 失败（不影响分析）: {_sanitize_for_log(result.stderr[:200])}")
+        _query_mod.cmd_session("start")
     except Exception as e:
         logger.warning(f"session start 异常（不影响分析）: {_sanitize_for_log(str(e))}")
 
 
 def _session_summary():
-    """调用 query.py session summary，输出本轮积分消耗汇总（以 query.py 记账为准）。"""
+    """输出本轮积分消耗汇总（直接函数调用，不再 subprocess）"""
     try:
-        cmd = [sys.executable, str(_QUERY_SCRIPT), "session", "summary"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=str(_SCRIPT_DIR))
-        if result.returncode != 0 or not result.stdout.strip():
-            return
-        data = json.loads(result.stdout)
-        if data.get("success"):
-            print(f"\n=== 积分消耗汇总（以 session summary 为准）===")
-            print(f"  计费调用次数: {data.get('call_count')}")
-            print(f"  累计消耗积分: {data.get('total_consumed')}")
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            _query_mod.cmd_session("summary")
+        output = buf.getvalue().strip()
+        if output:
+            data = json.loads(output)
+            if data.get("success"):
+                print(f"\n=== 积分消耗汇总（以 session summary 为准）===")
+                print(f"  计费调用次数: {data.get('call_count')}")
+                print(f"  累计消耗积分: {data.get('total_consumed')}")
     except Exception as e:
         logger.warning(f"session summary 异常: {_sanitize_for_log(str(e))}")
 
@@ -116,6 +114,9 @@ def analyze_stock(code: str, config: Optional[Dict] = None) -> Dict[str, Any]:
     if config is None:
         config = load_config()
 
+    # 规范：本轮首次业务调用前 session start，重置积分账本（记账以 query.py 为准）
+    _session_start()
+
     logger.info(f"开始分析股票: {_sanitize_for_log(code)}")
 
     # 获取历史数据和股票名称（仅使用日行情接口）
@@ -124,6 +125,7 @@ def analyze_stock(code: str, config: Optional[Dict] = None) -> Dict[str, Any]:
 
     if result is None:
         logger.error(f"无法获取 {_sanitize_for_log(code)} 的数据")
+        _session_summary()
         return {
             'code': code,
             'name': code,
@@ -136,6 +138,7 @@ def analyze_stock(code: str, config: Optional[Dict] = None) -> Dict[str, Any]:
 
     if df.empty:
         logger.error(f"无法获取 {_sanitize_for_log(code)} 的数据")
+        _session_summary()
         return {
             'code': code,
             'name': name,
@@ -161,6 +164,9 @@ def analyze_stock(code: str, config: Optional[Dict] = None) -> Dict[str, Any]:
     }
 
     logger.info(f"{_sanitize_for_log(code)} 分析完成，技术面评分: {ai_result.get('sentiment_score', trend_result.signal_score)}")
+
+    # 规范：会话结束 session summary，输出本轮积分消耗（记账以 query.py 为准，不自行统计）
+    _session_summary()
     return result
 
 
@@ -241,15 +247,20 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     if config is None:
         config = load_config()
 
+    # 规范：本轮首次业务调用前 session start，重置积分账本
+    _session_start()
+
     days = config.get('data', {}).get('days', 20)
 
     # 1. 获取行情数据 — 失败则直接报错
     data_result = get_daily_data(code, days=days)
     if data_result is None:
+        _session_summary()
         return f"❌ 无法获取 {_sanitize_for_markdown(code)} 的行情数据，请检查数据源配置后重试。"
 
     df, name = data_result
     if df.empty:
+        _session_summary()
         return f"❌ {_sanitize_for_markdown(code)} ({_sanitize_for_markdown(name)}) 行情数据为空，无法生成报告。"
 
     # 2. 技术分析
@@ -449,6 +460,9 @@ def generate_report(code: str, config: Optional[Dict] = None) -> str:
     lines.append("")
 
     lines.append("*免责声明: 本报告由 A股技术分析系统自动生成，基于公开市场数据和技术面分析，仅供学习研究参考，不构成任何投资建议。股市有风险，投资需谨慎。*")
+
+    # 规范：会话结束 session summary，输出本轮积分消耗
+    _session_summary()
 
     return "\n".join(lines)
 

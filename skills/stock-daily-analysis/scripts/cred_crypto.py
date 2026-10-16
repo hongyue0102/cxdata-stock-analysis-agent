@@ -1,19 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-凭证加解密模块（缓解风险2：CXDA_USER_KEY 明文存储）。
+凭证加解密模块（兼容历史明文与 CXDA_USER_KEY / authtoken 的 ENCv1 密文）。
 
 设计：
-- 使用 cryptography 库的 Fernet 对称加密（AES128-CBC + HMAC，密码学安全）。
+- 使用 cryptography 库的 Fernet 加解密凭证（AES128-CBC + HMAC）。
 - 密钥由本机特征（hostname + 登录用户名 + machine-id）**加上一份用户私有 pepper 文件**
   经 PBKDF2HMAC 派生。pepper 存放于 ~/.cxda-cache/.cred_pepper.bin，
   权限 0o600（O_NOFOLLOW + O_EXCL 首次创建，仅当前用户可读）。
   引入 pepper 之后，同机其他用户即使能读到密文文件、也知道 host/user/machine-id
   这些公开属性，因为无法读到 pepper 文件本身，无法派生出正确密钥（缓解水平越权）。
-- get_user_key/set_user_key 透明调用本模块；兼容老明文数据（解密失败时按明文返回并标记需迁移）。
+- common.save_auth 根据已有 CXDA_USER_KEY 的存储形态决定是否加密：历史明文
+  保持明文，已有密文保持密文，尚无 userKey 的新用户使用密文。
+- get_user_key/get_cached_token 透明解密 ENCv1，并兼容读取历史明文。
+
+依赖：加解密 ENCv1 凭证需要 cryptography；部署环境须按父目录 requirements.txt
+安装依赖。
 
 注意：本机特征派生只能防「肉眼直读」和「文件被拷走离线破解」，
-无法防御已获得本机同用户执行权限的攻击者（那种场景下任何本地加密都无意义，
-需配合风险6的文件权限 0o600 才构成完整防护）。
+无法防御已获得本机同用户执行权限的攻击者（那种场景下任何本地加密都无意义）。
 """
 
 import base64
@@ -23,8 +27,9 @@ import platform
 import secrets
 import socket
 import stat as _stat
-import sys
+from functools import lru_cache
 from pathlib import Path
+from typing import Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -33,21 +38,26 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 # 固定 salt（公开不影响安全：PBKDF2 的强度依赖迭代次数 + 特征输入的不可预测性）
 _SALT = b"cxda-cred-v1-salt-do-not-change"
 # 标记前缀，用于区分密文与明文（明文凭证不会以这个开头）
-_ENC_PREFIX = "ENCv1:"
+ENC_PREFIX = "ENCv1:"
+_ENC_PREFIX = ENC_PREFIX  # 保留旧模块内部名称，兼容已有调用方
 # Pepper 文件路径与大小
 _PEPPER_FILENAME = ".cred_pepper.bin"
 _PEPPER_SIZE = 32
 
 
 def _pepper_dir() -> Path:
-    """pepper 文件所在目录，与工作空间一致。若父目录不存在则创建。"""
+    """pepper 文件所在目录；拒绝软链/非目录节点并固定为 0700。"""
     d = Path.home() / ".cxda-cache"
     try:
+        st = os.lstat(d)
+        if _stat.S_ISLNK(st.st_mode):
+            raise RuntimeError("拒绝凭证目录为符号链接: {}".format(d))
+        if not _stat.S_ISDIR(st.st_mode):
+            raise RuntimeError("拒绝凭证目录为非目录节点: {}".format(d))
+    except FileNotFoundError:
         d.mkdir(parents=True, exist_ok=True, mode=0o700)
-        try:
-            os.chmod(d, 0o700)
-        except OSError:
-            pass
+    try:
+        os.chmod(d, 0o700)
     except OSError:
         pass
     return d
@@ -76,11 +86,29 @@ def _get_or_create_pepper() -> bytes:
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_NONBLOCK"):
+            flags |= os.O_NONBLOCK
         if hasattr(os, "O_BINARY"):
             flags |= os.O_BINARY
         fd = os.open(pepper_path, flags)
         try:
-            data = os.read(fd, _PEPPER_SIZE * 4)
+            opened_stat = os.fstat(fd)
+            if not _stat.S_ISREG(opened_stat.st_mode):
+                raise RuntimeError("拒绝 pepper 非普通文件: {}".format(pepper_path))
+            if hasattr(os, "fchmod"):
+                try:
+                    os.fchmod(fd, 0o600)
+                except OSError:
+                    pass
+            chunks = []
+            remaining = _PEPPER_SIZE * 4
+            while remaining > 0:
+                chunk = os.read(fd, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            data = b"".join(chunks)
         finally:
             os.close(fd)
         if len(data) < _PEPPER_SIZE:
@@ -100,9 +128,12 @@ def _get_or_create_pepper() -> bytes:
         # 并发创建：递归再走一次读路径（此次分支必然进入 exists 分支）
         return _get_or_create_pepper()
     try:
-        written = os.write(fd, pepper)
-        if written != _PEPPER_SIZE:
-            raise RuntimeError(f"pepper 写入不完整: {written}/{_PEPPER_SIZE}")
+        offset = 0
+        while offset < _PEPPER_SIZE:
+            written = os.write(fd, pepper[offset:])
+            if written <= 0:
+                raise RuntimeError(f"pepper 写入不完整: {offset}/{_PEPPER_SIZE}")
+            offset += written
     finally:
         os.close(fd)
     # 双保险：确保 0o600（POSIX），Windows 上 chmod 会被忽略但 %USERPROFILE% 默认独占 ACL
@@ -132,10 +163,10 @@ def _get_effective_username() -> str:
         try:
             import ctypes
             from ctypes import wintypes
-            GetUserNameW = ctypes.windll.advapi32.GetUserNameW
+            get_user_name_w = ctypes.windll.advapi32.GetUserNameW
             size = wintypes.DWORD(257)
             buf = ctypes.create_unicode_buffer(size.value)
-            if GetUserNameW(buf, ctypes.byref(size)):
+            if get_user_name_w(buf, ctypes.byref(size)):
                 return buf.value or ""
         except Exception:
             return ""
@@ -144,13 +175,13 @@ def _get_effective_username() -> str:
 
 
 def _get_machine_id() -> str:
-    """获取机器唯一标识，增加密钥派生材料不可预测性（缓解火山风险3：硬编码凭证）。
+    """获取机器唯一标识，增加密钥派生材料不可预测性。
 
     优先级：
     1. macOS IOPlatformUUID（ioreg）
     2. Linux /etc/machine-id 或 /var/lib/dbus/machine-id
     3. Windows MachineGuid 注册表
-    4. 回退空串（仍依赖 hostname+user，与旧版一致）
+    4. 回退空串（仍依赖 hostname+user）
     """
     import subprocess as _sp
 
@@ -188,6 +219,7 @@ def _get_machine_id() -> str:
     return ""
 
 
+@lru_cache(maxsize=1)
 def _derive_key() -> bytes:
     r"""由本机特征 + 用户私有 pepper 派生 Fernet 密钥（base64 编码的 32 字节）。
 
@@ -227,7 +259,7 @@ def _derive_key() -> bytes:
 
 
 def encrypt(plaintext: str) -> str:
-    """加密明文，返回带前缀的密文字符串。空串原样返回。"""
+    """加密明文，返回带 ENCv1 前缀的密文；空串原样返回。"""
     if not plaintext:
         return plaintext
     f = Fernet(_derive_key())
@@ -235,26 +267,21 @@ def encrypt(plaintext: str) -> str:
     return _ENC_PREFIX + token.decode("ascii")
 
 
-def decrypt(stored: str) -> str:
-    """解密。若 stored 是明文（无前缀或解密失败），原样返回并交给调用方迁移。
+def decrypt(stored: str) -> Tuple[str, bool]:
+    """解密。若 stored 是明文（无前缀），原样返回并标记其明文形态。
 
-    返回 (明文, is_plaintext_needs_migration)。
+    返回 (明文, is_plaintext)。是否迁移由调用方决定；共享认证凭证不迁移。
     """
     if not stored:
         return "", False
     if not stored.startswith(_ENC_PREFIX):
-        # 老明文数据：原样返回，标记需迁移加密
+        # 老明文数据：原样返回，由调用方决定是否迁移
         return stored, True
-    token = stored[len(_ENC_PREFIX):].encode("ascii")
     try:
+        token = stored[len(_ENC_PREFIX):].encode("ascii")
         f = Fernet(_derive_key())
         return f.decrypt(token).decode("utf-8"), False
-    except (InvalidToken, ValueError):
+    except (InvalidToken, ValueError, UnicodeError):
         return "", False
     except Exception:
         return "", False
-
-
-def is_encrypted(stored: str) -> bool:
-    """判断 stored 是否为加密形态。"""
-    return bool(stored) and stored.startswith(_ENC_PREFIX)

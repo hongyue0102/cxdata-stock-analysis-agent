@@ -1,21 +1,25 @@
 # -*- coding: utf-8 -*-
 """
 CXDA Skill 公共模块
-提取各脚本中共用的常量、工具函数、CLI 缓存读写逻辑。
+提取各脚本中共用的常量、工具函数、CLI 缓存读写逻辑及接口审计日志。
 """
 
 import base64
 import gzip
 import json
 import os
+import posixpath
+import re
 import subprocess
 import sys
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Tuple
 
-# 凭证加解密（硬依赖，缓解风险3：杜绝任何“无加密执行”分支）。
-# 缺失 cryptography 库时直接 ImportError 终止，绝不退化到明文存储。
+# 凭证加解密（兼容历史明文与已有 ENCv1 缓存）。
 # requirements.txt 已声明 cryptography，部署环境须 pip install。
 import cred_crypto
 
@@ -36,120 +40,230 @@ PROXIES = {
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 TOKEN_VALID_SECONDS = 300  # authtoken 缓存 300 秒
+TOKEN_REFRESH_SKEW_SECONDS = 10
+_TOKEN_MEMORY_CACHE = None
 
 # 渠道参数（Skill生成时自动填充，请勿手动修改）
 REQUEST_CHANNEL = "CAXEN"
 
+# 接口调用审计日志（每行一个 JSON；写入缓存工作区 .shared，失败时静默忽略）。
+# 日志仅供本地排障/审计使用，不参与任何业务流程，也不会写到 stdout/stderr。
+API_CALL_LOG_FILE = "cxda_api_calls.jsonl"
+_AUDIT_CONTROL_RE = re.compile(r"[\r\n\t\x00-\x1f\x7f]")
+_AUDIT_SENSITIVE_KEYS = frozenset({
+    "authtoken", "token", "accesstoken", "access_token",
+    "userkey", "user_key", "cxda_user_key", "verifycode", "verify_code",
+    "apikey", "api_key", "password", "passwd", "secret", "clientsecret",
+    "client_secret", "refresh_token", "authorization", "cookie",
+})
+
+
+def _audit_mask(value, key=None):
+    """清理审计字段中的控制字符并脱敏凭证/验证码。
+
+    参数名保留在日志中，便于定位调用；已知敏感字段仅记录 ``****``，
+    手机号使用局部掩码，其他字段原样保留（控制字符会被替换为空格）。
+    """
+    normalized_key = str(key or "").replace("-", "_").lower()
+    if normalized_key in _AUDIT_SENSITIVE_KEYS:
+        return "****"
+    if normalized_key in {"phone", "mobile", "mobilephone", "phone_number"}:
+        text = "" if value is None else str(value)
+        if len(text) > 7:
+            return text[:3] + "****" + text[-4:]
+        return "****"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _audit_mask(v, k) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_audit_mask(v, key) for v in value]
+    return _AUDIT_CONTROL_RE.sub(" ", str(value))
+
+
+def _audit_url(url):
+    """脱敏 URL 查询串中的凭证，避免非标准调用把密钥写入日志。"""
+    text = _AUDIT_CONTROL_RE.sub(" ", str(url or ""))
+    try:
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+        parsed = urlsplit(text)
+        if not parsed.query:
+            return text
+        query = []
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            query.append((key, _audit_mask(value, key)))
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+    except Exception:
+        return text
+
+
+def _audit_complete(value):
+    """将完整响应转换为可安全写入 JSONL 的结构，保留所有字段和值。"""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        if isinstance(value, str):
+            return _AUDIT_CONTROL_RE.sub(" ", value)
+        return value
+    if isinstance(value, dict):
+        return {str(k): _audit_complete(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_audit_complete(v) for v in value]
+    return _AUDIT_CONTROL_RE.sub(" ", str(value))
+
+
+def _is_full_response_endpoint(url):
+    """仅对分页配置接口保留完整响应，避免其它接口响应膨胀审计日志。"""
+    try:
+        from urllib.parse import urlsplit
+        path = (urlsplit(str(url or "")).path or "").rstrip("/")
+        return path.endswith("/mall/api_getApiLimitSetting.htm")
+    except Exception:
+        return False
+
+
+def log_api_call(method, url, params=None, *, operation=None, success=None,
+                 response_code=None, error_type=None, extra=None,
+                 response=None, include_response=False):
+    """静默追加一条接口调用日志。
+
+    该函数故意永不向调用方抛出异常，日志故障不能改变接口行为。日志写入
+    公域缓存文件，利用 ``append_shared_text`` 的 O_APPEND 保证多进程追加时
+    每条 JSONL 记录不互相覆盖。``params`` 会保留字段名但自动脱敏敏感值；
+    ``include_response=True`` 时额外保留完整响应内容。
+    """
+    try:
+        event = {
+            "ts": int(time.time()),
+            "method": _AUDIT_CONTROL_RE.sub(" ", str(method or "")),
+            "url": _audit_url(url),
+            "params": _audit_mask(dict(params or {})),
+        }
+        if operation:
+            event["operation"] = _AUDIT_CONTROL_RE.sub(" ", str(operation))
+        if success is not None:
+            event["success"] = bool(success)
+        if response_code is not None:
+            event["response_code"] = _audit_mask(response_code, "response_code")
+        if error_type:
+            event["error_type"] = _AUDIT_CONTROL_RE.sub(" ", str(error_type))
+        if isinstance(extra, dict):
+            event["extra"] = _audit_mask(extra)
+        if include_response:
+            # 分页配置接口要求完整留存响应；此字段不做敏感键掩码，
+            # 仅替换控制字符，确保日志中的 JSON 记录结构不被破坏。
+            event["response"] = _audit_complete(response)
+        # append_shared_text is defined below and resolved when this function runs.
+        append_shared_text(API_CALL_LOG_FILE, json.dumps(event, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+class AuthenticationRequiredError(RuntimeError):
+    """无可用认证信息时携带可直接输出给 Agent 的结构化响应。"""
+
+    def __init__(self, response: dict):
+        super().__init__(response.get("msg", "需要完成认证"))
+        self.response = response
+
 
 # ── CLI 缓存封装 ──────────────────────────────────────────────────────
 
-def _safe_env_path(name: str) -> str:
-    """读取并校验环境变量取值（缓解环境变量 RCE）。
 
-    拒绝 shell 元字符（; | & $ ` > < 换行等）、空字节，以及路径遍历序列（../）。
-    非法值视为未设置，回退默认值。
+def _safe_env_path(name: str) -> str:
+    """读取并校验路径类环境变量。
+
+    这些值最终会参与子进程启动或缓存路径拼接，因此不能把 shell 元字符、
+    控制字符或路径遍历片段原样带入。非法值按“未设置”处理并回退默认值，
+    对现有调用方保持透明。
     """
     value = os.environ.get(name, "")
     if not value:
         return ""
     if any(ch in value for ch in (";", "|", "&", "$", "`", ">", "<", "\n", "\r", "\0")):
         return ""
-    # 拒绝路径遍历：含 .. 的取值一律拒绝（缓解 env RCE：绝对路径/相对逃逸指向恶意可执行文件）
     if ".." in value:
         return ""
     return value
 
 
-def _safe_env_executable(name: str, trusted_dir=None, trusted_name: str = None, name_pattern: str = None) -> str:
-    """校验指向可执行文件的环境变量（缓解 env RCE）。
+def _safe_env_executable(name: str, trusted_dir=None, trusted_name: str = None,
+                         name_pattern: str = None) -> str:
+    """校验环境变量指定的可执行文件或脚本路径。
 
-    在 _safe_env_path 基础上额外要求：
-    - 必须是绝对路径；
-    - 若指定 trusted_dir，则路径必须位于该目录（或目录列表中的任一项）内；
-    - 若指定 trusted_name，resolve 后文件名必须精确匹配；
-    - 若指定 name_pattern（正则），resolve 后文件名必须匹配（如 python 解释器）。
-    不满足则视为未设置，回退默认值。
-
-    参数：
-    - trusted_dir: 允许单个 Path 或 Path/str 列表，多目录时命中任一即通过。
+    路径必须是绝对路径、指向普通文件，并可进一步限制在可信目录或文件名内，
+    从而保留 CXDA_CACHE_* 的兼容配置能力，同时阻断环境变量替换解释器/脚本。
     """
     value = _safe_env_path(name)
     if not value:
         return ""
-    p = Path(value)
-    if not p.is_absolute():
+    path = Path(value)
+    if not path.is_absolute():
         return ""
     try:
-        resolved = p.resolve()
-    except (ValueError, OSError):
+        resolved = path.resolve()
+        if not resolved.is_file():
+            return ""
+    except (OSError, ValueError):
         return ""
+
     if trusted_dir is not None:
-        candidates = trusted_dir if isinstance(trusted_dir, (list, tuple)) else [trusted_dir]
+        candidates = trusted_dir if isinstance(trusted_dir, (list, tuple, set)) else [trusted_dir]
         matched = False
-        for cand in candidates:
+        for candidate in candidates:
             try:
-                cand_path = Path(cand).resolve()
-            except (ValueError, OSError):
-                continue
-            try:
-                resolved.relative_to(cand_path)
+                resolved.relative_to(Path(candidate).resolve())
                 matched = True
                 break
-            except ValueError:
+            except (OSError, ValueError):
                 continue
         if not matched:
             return ""
     if trusted_name is not None and resolved.name != trusted_name:
         return ""
-    if name_pattern is not None:
-        import re as _re_mod
-        if not _re_mod.match(name_pattern, resolved.name):
-            return ""
-    return value
+    if name_pattern is not None and not re.match(name_pattern, resolved.name, re.IGNORECASE):
+        return ""
+    return str(resolved)
 
 
-# Python 解释器可信目录白名单（缓解 CXDA_CACHE_PYTHON RCE 面向纵深）。
-# 覆盖主流发行版系统解释器位置 + Windows Python 常见安装位置。
-# 允许 sys.executable 所在目录（用户/虚拟环境的解释器），维持默认行为可用。
 def _python_trusted_dirs():
+    """返回常见 Python 安装目录及当前解释器目录。"""
     dirs = [
         "/usr/bin", "/usr/local/bin", "/usr/sbin", "/usr/local/sbin",
-        "/bin", "/sbin",
-        "/opt/homebrew/bin", "/usr/local/opt",
+        "/bin", "/sbin", "/opt/homebrew/bin", "/usr/local/opt",
         "/opt/python", "/opt",
     ]
-    # 加入 sys.executable 所在目录（venv / 系统 site-packages / conda 环境）
+    if os.name == "nt":
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
+            root = os.environ.get(env_name)
+            if root:
+                dirs.extend((str(Path(root) / "Python"), str(Path(root) / "Programs" / "Python")))
     try:
-        exe_dir = str(Path(sys.executable).resolve().parent)
-        if exe_dir and exe_dir not in dirs:
-            dirs.append(exe_dir)
-    except Exception:
+        current_dir = str(Path(sys.executable).resolve().parent)
+        if current_dir not in dirs:
+            dirs.append(current_dir)
+    except (OSError, ValueError):
         pass
     return dirs
 
 
 def _get_cli_path() -> Path:
-    """获取 cxda_cache_cli.py 路径（本地优先，限定在 scripts 目录内）"""
-    scripts_dir = Path(__file__).parent
-    env_path = _safe_env_executable("CXDA_CACHE_CLI_PATH", trusted_dir=scripts_dir, trusted_name="cxda_cache_cli.py")
+    """获取 cxda_cache_cli.py 路径（仅允许当前 scripts 目录内的同名脚本）。"""
+    scripts_dir = Path(__file__).resolve().parent
+    env_path = _safe_env_executable(
+        "CXDA_CACHE_CLI_PATH",
+        trusted_dir=scripts_dir,
+        trusted_name="cxda_cache_cli.py",
+    )
     if env_path:
         return Path(env_path)
     return scripts_dir / "cxda_cache_cli.py"
 
 
 def _get_python_exe() -> str:
-    """获取 Python 执行路径。
-
-    安全（缓解 CXDA_CACHE_PYTHON RCE 纵深）：
-    - 必须绝对路径（_safe_env_executable 已保证）；
-    - 文件名必须匹配 ^python(\\d+(\\.\\d+)*)?$；
-    - 必须位于可信目录白名单内（/usr/bin, /usr/local/bin, sys.executable dir 等），
-      避免 `CXDA_CACHE_PYTHON=/tmp/evil_python` 之类的环境变量注入执行任意解释器。
-    """
+    """获取 Python 执行路径（环境变量仅接受可信 Python 可执行文件）。"""
     env_python = _safe_env_executable(
         "CXDA_CACHE_PYTHON",
         trusted_dir=_python_trusted_dirs(),
-        name_pattern=r"^python(\d+(\.\d+)*)?$",
+        name_pattern=r"^python(\d+(\.\d+)*)?(\.exe)?$",
     )
     if env_python:
         return env_python
@@ -165,15 +279,68 @@ def _get_workspace() -> str:
     2. CLAUDE_WORKSPACE 环境变量
     3. 默认 ~/.cxda-cache
     """
-    workspace = _safe_env_path("CXDA_CACHE_WORKSPACE") \
-        or _safe_env_path("CLAUDE_WORKSPACE") \
+    candidate = (
+        _safe_env_path("CXDA_CACHE_WORKSPACE")
+        or _safe_env_path("CLAUDE_WORKSPACE")
         or str(Path.home() / ".cxda-cache")
+    )
+    try:
+        path = Path(candidate).expanduser()
+        if not path.is_absolute():
+            return str(Path.home() / ".cxda-cache")
+        resolved = path.resolve()
+        home = Path.home().resolve()
+        critical = (
+            "/etc", "/bin", "/sbin", "/usr", "/boot", "/dev", "/proc", "/sys",
+            "/var", "/lib", "/lib64", "/Library", "/System",
+        )
+        value = str(resolved)
+        if any(value == item or value.startswith(item + os.sep) for item in critical):
+            return str(Path.home() / ".cxda-cache")
+        if resolved == home:
+            return str(home / ".cxda-cache")
+        try:
+            resolved.relative_to(home)
+        except ValueError:
+            return str(Path.home() / ".cxda-cache")
+        resolved.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(resolved, 0o700)
+        except OSError:
+            pass
+        return str(resolved)
+    except (OSError, ValueError):
+        return str(Path.home() / ".cxda-cache")
 
-    Path(workspace).mkdir(parents=True, exist_ok=True)
-    return workspace
+
+def _build_child_env() -> dict:
+    """构造缓存 CLI 的最小环境，避免危险变量注入和无关敏感变量泄露。"""
+    allowed_exact = {
+        "PATH", "HOME", "USER", "USERNAME", "USERPROFILE", "LOGNAME",
+        "LANG", "TERM", "TMPDIR", "TEMP", "TMP", "SHELL", "PWD",
+        "HOSTNAME", "HOST", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+        "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+        "CLAUDE_WORKSPACE",
+    }
+    blocked_exact = {
+        "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONINSPECT",
+        "PYTHONDEBUG", "PYTHONDONTWRITEBYTECODE", "PYTHONNOUSERSITE",
+        "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_DEBUG",
+        "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
+    }
+    env = {}
+    for key, value in os.environ.items():
+        upper = key.upper()
+        if upper in blocked_exact:
+            continue
+        if upper in allowed_exact or upper.startswith("LC_") or upper.startswith("CXDA_CACHE_"):
+            env[key] = value
+    env["CXDA_CACHE_WORKSPACE"] = _get_workspace()
+    return env
 
 
-def _cli_call(command: str, subcommand: str = None, args: list = None, raw_output: bool = False, stdin_input: str = None) -> dict:
+def _cli_call(command: str, subcommand: str = None, args: list = None,
+              raw_output: bool = False, stdin_input: str = None) -> dict:
     """
     调用 cxda_cache_cli.py CLI
 
@@ -182,42 +349,16 @@ def _cli_call(command: str, subcommand: str = None, args: list = None, raw_outpu
         subcommand: 子命令（get, set, read, write 等）
         args: 额外参数列表
         raw_output: 是否返回原始输出
-        stdin_input: 通过 stdin 传入的内容（用于传敏感数据，避免出现在进程列表，缓解风险2）
+        stdin_input: 通过 stdin 传入内容，避免凭证/缓存内容出现在进程参数中
 
     Returns:
         CLI 返回的 JSON 字典
-
-    安全（缓解风险3）：异常时不把完整 cmd（可能含敏感参数）放入 error，只返回脱敏的类型信息。
-    安全（缓解火山风险1+2）：环境变量白名单传递，只传子进程必需变量，
-    拒绝 PYTHONPATH/PYTHONHOME/LD_PRELOAD 等危险变量和敏感变量泄露给子进程。
     """
     args = args or []
     cmd = [_get_python_exe(), str(_get_cli_path()), command]
     if subcommand:
         cmd.append(subcommand)
     cmd.extend(args)
-
-    # 环境变量白名单：只传子进程必需变量，阻断 PYTHONPATH/LD_PRELOAD 等 RCE 向量，
-    # 同时避免 AWS_*、DATABASE_URL 等敏感变量泄露给子进程（火山风险1+2）
-    _ENV_WHITELIST_PREFIXES = (
-        "PATH", "HOME", "USER", "USERNAME", "LOGNAME", "LANG", "LC_",
-        "TERM", "TMPDIR", "TEMP", "TMP", "SHELL", "PWD",
-        "CXDA_CACHE_", "CLAUDE_WORKSPACE",
-        "HOSTNAME", "HOST",
-    )
-    _ENV_BLACKLIST_EXACT = {
-        "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONINSPECT",
-        "PYTHONDEBUG", "PYTHONDONTWRITEBYTECODE", "PYTHONNOUSERSITE",
-        "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
-        "DYLD_LIBRARY_PATH", "LD_DEBUG",
-    }
-    env = {}
-    for k, v in os.environ.items():
-        if k in _ENV_BLACKLIST_EXACT:
-            continue
-        if any(k.startswith(prefix) for prefix in _ENV_WHITELIST_PREFIXES):
-            env[k] = v
-    env.setdefault("CXDA_CACHE_WORKSPACE", _get_workspace())
 
     try:
         result = subprocess.run(
@@ -226,26 +367,31 @@ def _cli_call(command: str, subcommand: str = None, args: list = None, raw_outpu
             capture_output=True,
             text=True,
             timeout=30,
-            env=env,
+            env=_build_child_env(),
         )
         stdout = result.stdout.strip() if result.stdout else ""
 
         if raw_output:
+            if result.returncode != 0 and not stdout:
+                return {"success": False, "error": "CLI 调用失败"}
             return {"success": True, "content": stdout}
 
         if stdout:
             try:
                 return json.loads(stdout)
             except json.JSONDecodeError:
+                if result.returncode != 0:
+                    return {"success": False, "error": "CLI 调用失败"}
                 return {"success": True, "content": stdout}
+        if result.returncode != 0:
+            return {"success": False, "error": "CLI 调用失败"}
         return {"success": False, "error": "Empty output"}
     except subprocess.TimeoutExpired:
         return {"success": False, "error": "CLI 调用超时"}
     except FileNotFoundError:
         return {"success": False, "error": "CLI 可执行文件不存在"}
-    except Exception as e:
-        # 脱敏：不返回可能含敏感参数的完整命令行，只返回异常类型名（缓解风险3）
-        return {"success": False, "error": "CLI 调用失败：{}".format(type(e).__name__)}
+    except Exception as exc:
+        return {"success": False, "error": "CLI 调用失败：{}".format(type(exc).__name__)}
 
 
 # ── 认证数据读写 ──────────────────────────────────────────────────────
@@ -264,7 +410,7 @@ def get_cached_auth() -> dict:
 def check_terms_accepted() -> Tuple[bool, dict]:
     """
     检查用户是否已接受服务协议
-
+    
     Returns:
         (accepted, error_response): accepted=True 时可继续，False 时返回结构化错误
     """
@@ -273,16 +419,7 @@ def check_terms_accepted() -> Tuple[bool, dict]:
     if not accepted:
         return False, {
             "code": "10500",
-            "msg": "用户尚未接受服务协议，请先通过 auth.py terms-check 和 terms-accept 完成协议确认",
-            "status": "terms_not_accepted",
-            "data": "",
-        }
-    # 同时检查是否已完成电话号码鉴权（缓存中有 CXDA_USER_KEY）
-    stored = auth.get("CXDA_USER_KEY", "")
-    if not stored:
-        return False, {
-            "code": "10500",
-            "msg": "尚未完成认证，请先通过 auth.py send-code 和 verify 完成短信鉴权",
+            "msg": "用户尚未接受服务协议，请按认证流程展示协议并在用户同意后执行 auth.py terms-accept",
             "status": "terms_not_accepted",
             "data": "",
         }
@@ -292,59 +429,71 @@ def check_terms_accepted() -> Tuple[bool, dict]:
 def save_auth(data: dict):
     """保存认证数据到缓存（合并更新）。
 
-    CXDA_USER_KEY 与 authtoken 落盘前统一加密（缓解明文存储风险），
-    所有调用方无需各自处理。cred_crypto 为硬依赖（顶部 import），不存在无加密分支。
-
-    加密判定改用"尝试解密+前缀+解密成功"三重验证（替代 is_encrypted 纯前缀检查），
-    防止后端返回的明文 key 恰好以 "ENCv1:" 开头时被误判为已加密而明文落盘。
-    仅当 key 有 ENCv1: 前缀且 decrypt 返回非空明文时，才视为已加密形态跳过。
+    存储形态以落盘前已有的 CXDA_USER_KEY 为准：
+    - 历史明文用户继续使用明文，不自动迁移，保证旧版 Skill 仍可读取；
+    - 已有 ENCv1 密文的用户继续使用密文；
+    - 尚无 CXDA_USER_KEY 的新用户，首次 userKey 与后续 authtoken 均使用密文。
     """
-    if isinstance(data, dict):
-        # CXDA_USER_KEY 加密
-        if data.get("CXDA_USER_KEY"):
-            key = data["CXDA_USER_KEY"]
-            already_encrypted = False
-            if key.startswith(cred_crypto._ENC_PREFIX):
-                decrypted, _ = cred_crypto.decrypt(key)
-                if decrypted:
-                    already_encrypted = True
-            if not already_encrypted:
-                data = {**data, "CXDA_USER_KEY": cred_crypto.encrypt(key)}
-        # authtoken 加密（缓解 authtoken 明文缓存风险，5 分钟有效期内仍是敏感凭证）
-        if data.get("authtoken"):
-            tok = data["authtoken"]
-            already_enc_tok = False
-            if isinstance(tok, str) and tok.startswith(cred_crypto._ENC_PREFIX):
-                decrypted_tok, _ = cred_crypto.decrypt(tok)
-                if decrypted_tok:
-                    already_enc_tok = True
-            if not already_enc_tok and isinstance(tok, str):
-                data = {**data, "authtoken": cred_crypto.encrypt(tok)}
-    _cli_call("auth", "set", stdin_input=json.dumps(data, ensure_ascii=False))
+    if not isinstance(data, dict):
+        raise TypeError("认证数据必须是对象")
+
+    payload = dict(data)
+    credential_fields = ("CXDA_USER_KEY", "authtoken")
+    if any(isinstance(payload.get(field), str) and payload.get(field)
+           for field in credential_fields):
+        existing_auth = get_cached_auth()
+        if not isinstance(existing_auth, dict):
+            existing_auth = {}
+        existing_user_key = existing_auth.get("CXDA_USER_KEY", "")
+        use_encryption = not (
+            isinstance(existing_user_key, str)
+            and existing_user_key
+            and not existing_user_key.startswith(cred_crypto.ENC_PREFIX)
+        )
+
+        if use_encryption:
+            for field in credential_fields:
+                value = payload.get(field)
+                if not isinstance(value, str) or not value:
+                    continue
+                if value == existing_auth.get(field):
+                    # 未修改的已有密文原样保留；即使当前机器特征变化导致暂时
+                    # 无法解密，也不能把它二次加密或降级为明文。
+                    continue
+                if value.startswith(cred_crypto.ENC_PREFIX):
+                    plaintext, _ = cred_crypto.decrypt(value)
+                    if not plaintext:
+                        raise ValueError("无效的 ENCv1 凭证: {}".format(field))
+                    continue
+                payload[field] = cred_crypto.encrypt(value)
+
+    # 通过 stdin 传递密钥，避免出现在 ps/process list；CLI 仍兼容旧 --data 形式。
+    _cli_call("auth", "set", stdin_input=json.dumps(payload, ensure_ascii=False))
+    global _TOKEN_MEMORY_CACHE
+    if "authtoken" in payload or "CXDA_USER_KEY" in payload:
+        _TOKEN_MEMORY_CACHE = None
+    try:
+        get_user_key.cache_clear()
+    except (AttributeError, NameError):
+        pass
 
 
 # ── 公域 JSON 文件读写（跨 Skill 共享，如会话账本） ──────────────────────
 
-import re as _re
-# filename 只允许 字母/数字/下划线/连字符/点（缓解路径遍历）
-_SHARED_FILENAME_RE = _re.compile(r'^[A-Za-z0-9_.\-]+$')
-# 纯点文件名（.、..、... 等）需额外拒绝——正则只拦分隔符不拦 ".."，
-# 攻击者可传 ".." 逃到父目录。
-_ALL_DOTS_RE = _re.compile(r'^\.+$')
+_SHARED_FILENAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_ALL_DOTS_RE = re.compile(r"^\.+$")
 
 
 def _validate_shared_filename(filename: str) -> str:
-    r"""校验公域文件名格式（缓解路径遍历）。CLI 侧已有防护，此处入口层双保险。
-
-    双重防护：
-    1. 字符白名单（_SHARED_FILENAME_RE）拒绝 `/`、`\`、URL 编码等分隔符；
-    2. 纯点串拒绝（_ALL_DOTS_RE）拒绝 `.`、`..`、`...` 等能定位到 .、..、
-       上级/当前目录的特殊名字。
-    """
-    if not isinstance(filename, str) or not filename or not _SHARED_FILENAME_RE.match(filename):
-        raise ValueError(f"非法公域文件名（仅允许字母数字下划线连字符点）: {filename!r}")
-    if _ALL_DOTS_RE.match(filename):
-        raise ValueError(f"非法公域文件名（拒绝纯点名，缓解路径遍历）: {filename!r}")
+    """校验共享文件名，阻断路径遍历和命令参数注入。"""
+    if (
+        not isinstance(filename, str)
+        or not filename
+        or not _SHARED_FILENAME_RE.fullmatch(filename)
+        or _ALL_DOTS_RE.fullmatch(filename)
+        or ".." in filename
+    ):
+        raise ValueError("非法公域文件名（仅允许安全文件名）: {!r}".format(filename))
     return filename
 
 
@@ -365,9 +514,14 @@ def get_shared_json(filename: str) -> dict:
 
 
 def save_shared_json(filename: str, data: dict):
-    """写入公域 JSON 文件（覆盖写）。内容经 stdin 传，不进命令行（避免进程列表暴露）。"""
+    """写入公域 JSON 文件（覆盖写，内容经 stdin 传递）。"""
     filename = _validate_shared_filename(filename)
-    _cli_call("shared", "write", [filename], stdin_input=json.dumps(data, ensure_ascii=False))
+    result = _cli_call(
+        "shared", "write", [filename],
+        stdin_input=json.dumps(data, ensure_ascii=False),
+    )
+    if not isinstance(result, dict) or result.get("success") is not True:
+        raise RuntimeError("写入共享 JSON 失败")
 
 
 def get_shared_text(filename: str) -> str:
@@ -393,51 +547,100 @@ def get_shared_text(filename: str) -> str:
 
 
 def save_shared_text(filename: str, content: str):
-    """写入公域文本文件（覆盖写）。内容经 stdin 传，不进命令行。"""
+    """写入公域文本文件（覆盖写，内容经 stdin 传递）。"""
     filename = _validate_shared_filename(filename)
-    _cli_call("shared", "write", [filename], stdin_input=content)
+    result = _cli_call("shared", "write", [filename], stdin_input=content)
+    if not isinstance(result, dict) or result.get("success") is not True:
+        raise RuntimeError("写入共享文本失败")
 
 
 def append_shared_text(filename: str, content: str):
-    """追加写入公域文本文件。内容经 stdin 传，不进命令行。"""
+    """追加写入公域文本文件（内容经 stdin 传递）。"""
     filename = _validate_shared_filename(filename)
-    _cli_call("shared", "append", [filename], stdin_input=content)
+    result = _cli_call("shared", "append", [filename], stdin_input=content)
+    if not isinstance(result, dict) or result.get("success") is not True:
+        raise RuntimeError("追加共享文本失败")
+
+
+@contextmanager
+def shared_file_lock(filename: str, timeout: float = 30.0):
+    """获取跨 Skill、跨进程共享锁，供会话等多文件事务使用。"""
+    filename = _validate_shared_filename(filename)
+    from cxda_cache_cli import CacheManager
+
+    manager = CacheManager(Path(_get_workspace()))
+    with manager.shared_lock(filename, timeout=timeout):
+        yield
+
+
+# ── 跨 Skill 平台策略 ────────────────────────────────────────────────
+
+PLATFORM_CONFIG_FILE = "cxda_platform_config.json"
+SHOW_BILLING_INFO_KEY = "show_billing_info"
+BILLING_INFO_VISIBLE_CHANNELS = frozenset({"ZORPHE","CAXEN"})
+
+
+def get_platform_show_billing_info() -> bool:
+    """
+    读取跨 Skill 共享的平台计费信息展示策略。
+
+    该策略同时控制积分消耗、套餐额度和 50 次调用确认。
+    共享配置中的显式值优先；缺失、损坏或值非法时根据 REQUEST_CHANNEL
+    生成缺省值：集合 BILLING_INFO_VISIBLE_CHANNELS 中的渠道展示，其他渠道隐藏。
+    调用方不要在长会话中缓存结果，应在每次业务命令开始时重新读取。
+    """
+    platform_config = get_shared_json(PLATFORM_CONFIG_FILE)
+    value = platform_config.get(SHOW_BILLING_INFO_KEY) if isinstance(platform_config, dict) else None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "on", "show", "visible"):
+            return True
+        if normalized in ("false", "0", "off", "hide", "hidden"):
+            return False
+    return str(REQUEST_CHANNEL or "").strip().upper() in BILLING_INFO_VISIBLE_CHANNELS
 
 
 # ── CXDA_USER_KEY 管理 ───────────────────────────────────────────────
 
-# CXDA_USER_KEY 允许的格式：16~128 位字母/数字/下划线/连字符
-# 拒绝含空白、控制字符、路径分隔符等任意值，防止攻击者通过设置环境变量绕过认证或注入
-_USER_KEY_RE = _re.compile(r"^[A-Za-z0-9_\-]{16,128}$")
+_LEGACY_USER_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 
 
-def _is_valid_user_key(key: str) -> bool:
-    """校验 CXDA_USER_KEY 格式，防止环境变量任意值绕过认证。"""
-    return isinstance(key, str) and bool(_USER_KEY_RE.match(key))
+def _is_legacy_safe_user_key(key: str) -> bool:
+    """兼容历史/测试环境中的短 userKey，但仍拒绝所有危险字符。"""
+    return isinstance(key, str) and bool(_LEGACY_USER_KEY_RE.fullmatch(key))
 
 
+@lru_cache(maxsize=1)
 def get_user_key() -> str:
     """
     获取 CXDA_USER_KEY
 
-    从缓存中读取（加密存储，读取时透明解密；老明文自动迁移）。
-    本版本不支持环境变量鉴权，必须通过 auth.py 短信鉴权获取。
+    优先级：
+    1. 环境变量 CXDA_USER_KEY
+    2. 缓存中的 CXDA_USER_KEY（兼容明文和 ENCv1 密文，不改写存储形态）
     """
+    env_key = os.environ.get("CXDA_USER_KEY")
+    if env_key and _is_legacy_safe_user_key(env_key):
+        return env_key
+
     auth = get_cached_auth()
     stored = auth.get("CXDA_USER_KEY", "")
-    if not stored:
+    if not isinstance(stored, str) or not stored:
         return ""
-    plaintext, needs_migration = cred_crypto.decrypt(stored)
-    if not plaintext:
+
+    # 只对已有密文透明解密；历史明文直接使用且绝不回写，保证旧版 Skill
+    # 继续能够读取同一份共享认证缓存。
+    if stored.startswith(cred_crypto.ENC_PREFIX):
+        plaintext, _ = cred_crypto.decrypt(stored)
+        if not plaintext or not _is_legacy_safe_user_key(plaintext):
+            return ""
+        return plaintext
+
+    if not _is_legacy_safe_user_key(stored):
         return ""
-    if not _is_valid_user_key(plaintext):
-        return ""
-    if needs_migration:
-        try:
-            set_user_key(plaintext)
-        except Exception:
-            pass
-    return plaintext
+    return stored
 
 
 def mask_user_key(key: str) -> str:
@@ -447,23 +650,27 @@ def mask_user_key(key: str) -> str:
     return key[:4] + "****" + key[-4:]
 
 
-def set_user_key(key: str):
-    """将 CXDA_USER_KEY 写入缓存（写入前强制格式校验，拒绝非法值污染缓存）。"""
-    if not _is_valid_user_key(key):
-        raise ValueError("非法 CXDA_USER_KEY 格式：仅允许 16-128 位字母数字下划线连字符")
-    save_auth({"CXDA_USER_KEY": key})
-
-
 # ── Token 管理 ────────────────────────────────────────────────────────
 
 def get_cached_token():
     """
     获取缓存的有效 token，返回 (token, need_refresh)
 
-    authtoken 在缓存中以 ENCv1 密文形态存储（缓解明文缓存风险），
-    这里透明解密后返回明文供业务使用。老明文数据 decrypt 会走 needs_migration
-    分支原样返回，下一次 cache_token 时被覆盖为密文。
+    兼容明文和 ENCv1 密文：已有密文在运行时透明解密，明文直接使用；
+    两种形态都不会因读取或刷新 token 被自动迁移、改写。
     """
+    global _TOKEN_MEMORY_CACHE
+    if isinstance(_TOKEN_MEMORY_CACHE, dict):
+        token = _TOKEN_MEMORY_CACHE.get("token")
+        expire = _TOKEN_MEMORY_CACHE.get("expire")
+        if (
+            token
+            and isinstance(expire, datetime)
+            and expire - datetime.now() > timedelta(seconds=TOKEN_REFRESH_SKEW_SECONDS)
+        ):
+            return token, False
+        _TOKEN_MEMORY_CACHE = None
+
     auth = get_cached_auth()
 
     try:
@@ -472,8 +679,8 @@ def get_cached_token():
         if not stored_token:
             return None, True
 
-        # 透明解密（兼容老明文；decrypt 对无前缀原样返回）
-        if isinstance(stored_token, str) and stored_token.startswith(cred_crypto._ENC_PREFIX):
+        # 只对已有密文透明解密；历史明文直接使用且绝不回写。
+        if isinstance(stored_token, str) and stored_token.startswith(cred_crypto.ENC_PREFIX):
             token, _ = cred_crypto.decrypt(stored_token)
             if not token:
                 return None, True
@@ -482,33 +689,30 @@ def get_cached_token():
 
         expire = datetime.strptime(expire_str, '%Y-%m-%d %H:%M:%S')
         remaining = expire - datetime.now()
-        if remaining <= timedelta(0):
+        if remaining <= timedelta(seconds=TOKEN_REFRESH_SKEW_SECONDS):
             return None, True  # 已过期
         else:
+            _TOKEN_MEMORY_CACHE = {"token": token, "expire": expire}
             return token, False  # 有效
     except Exception:
         return None, True
 
 
 def cache_token(token: str):
-    """缓存 token（authtoken 由 save_auth 统一加密，本函数不直接接触密钥材料）。"""
+    """缓存 token"""
+    global _TOKEN_MEMORY_CACHE
     auth = get_cached_auth()
+    expire = datetime.now() + timedelta(seconds=TOKEN_VALID_SECONDS)
     auth.update({
         'authtoken': token,
-        'authtoken_expire': (datetime.now() + timedelta(seconds=TOKEN_VALID_SECONDS)).strftime('%Y-%m-%d %H:%M:%S'),
+        'authtoken_expire': expire.strftime('%Y-%m-%d %H:%M:%S'),
     })
     save_auth(auth)
+    _TOKEN_MEMORY_CACHE = {"token": token, "expire": expire}
 
 
 def fetch_new_token() -> str:
-    """获取新 token。
-
-    安全：userKey 走 POST form body，不放在 GET query string，避免落入 access log、
-    浏览器/代理历史、Referer 头等（缓解未授权访问 & 凭证泄漏）。
-    显式 verify=True 强制 TLS 校验，设置 timeout 防止悬挂。
-    """
-    import requests
-
+    """获取新 token（敏感 userKey 通过 HTTPS POST body 传递）。"""
     user_key = get_user_key()
     if not user_key:
         return ""
@@ -517,16 +721,12 @@ def fetch_new_token() -> str:
         data = {"userKey": user_key}
         if REQUEST_CHANNEL:
             data["requestChannel"] = REQUEST_CHANNEL
-        resp = requests.post(
+        resp_data = http_post_form(
             f"{BASE_URL}/webservice/foreign_getAuthtoken.htm",
             data=data,
-            headers=HEADERS,
-            proxies=PROXIES,
-            timeout=30,
-            verify=True,
-            allow_redirects=False,
+            include_channel=False,
         )
-        token = json.loads(resp.text).get("result")
+        token = resp_data.get("result") if isinstance(resp_data, dict) else None
         if token:
             cache_token(token)
         return token or ""
@@ -534,7 +734,7 @@ def fetch_new_token() -> str:
         return ""
 
 
-def ensure_token() -> str:
+def ensure_token(emit_error: bool = True) -> str:
     """
     确保有有效 token（缓存未过期直接用，否则刷新）
 
@@ -542,55 +742,108 @@ def ensure_token() -> str:
         有效的 authtoken 字符串
 
     Raises:
-        SystemExit: 无 userKey 或获取 token 失败时打印错误并退出
+        SystemExit: 无 userKey 或获取 token 失败时输出 authentication_required 并退出
     """
     user_key = get_user_key()
     if not user_key:
-        output_error("未找到 CXDA_USER_KEY，请先通过 auth.py 完成认证")
-        sys.exit(1)
+        response = {
+            "code": "10500",
+            "msg": "未找到 CXDA_USER_KEY，请先通过 auth.py 完成认证",
+            "status": "authentication_required",
+            "data": "",
+        }
+        if emit_error:
+            output_json(response)
+            sys.exit(1)
+        raise AuthenticationRequiredError(response)
 
     token, need_refresh = get_cached_token()
     if need_refresh:
         token = fetch_new_token()
         if not token:
-            output_error("获取 authToken 失败")
-            sys.exit(1)
+            response = {
+                "code": "10500",
+                "msg": "获取 authToken 失败，请重新完成认证后重试",
+                "status": "authentication_required",
+                "data": "",
+            }
+            if emit_error:
+                output_json(response)
+                sys.exit(1)
+            raise AuthenticationRequiredError(response)
 
     return token
 
 
 # ── HTTP 请求封装 ─────────────────────────────────────────────────────
 
-# 响应 gzip 解压后最大允许 32 MiB，防止 gzip 炸弹耗尽内存
 _MAX_GZIP_DECOMPRESSED = 32 * 1024 * 1024
+_MAX_ENCODED_RESPONSE = 64 * 1024 * 1024
 
 
 def _validate_official_url(url: str):
-    """SSRF 防护：校验 url 必须命中官方 BASE_URL 的 scheme/host/path 前缀。"""
-    from urllib.parse import urlparse, unquote
-    import posixpath
+    """SSRF 防护：只允许官方 HTTPS 域名及 /cxda/ 下的接口路径。"""
+    from urllib.parse import unquote, urlparse
 
     base = urlparse(BASE_URL)
     parsed = urlparse(url) if isinstance(url, str) else None
-    norm_path = posixpath.normpath(unquote(parsed.path)) if parsed else ""
+    if not parsed:
+        raise ValueError("拒绝非白名单 URL 请求")
+    try:
+        parsed_port = parsed.port
+        base_port = base.port
+    except ValueError:
+        raise ValueError("拒绝非白名单 URL 请求")
+    # urlparse 对省略端口的 HTTPS 返回 None；显式 :443 与省略 :443 应等价，
+    # 否则合法官方 URL 会因书写方式不同被误拒绝。
+    parsed_effective_port = (
+        parsed_port if parsed_port is not None
+        else (443 if parsed.scheme.lower() == "https" else 80)
+    )
+    base_effective_port = (
+        base_port if base_port is not None
+        else (443 if base.scheme.lower() == "https" else 80)
+    )
+    raw_path = (parsed.path or "").replace("\\", "/")
+    norm_path = posixpath.normpath(unquote(raw_path))
     if (
-        not parsed
-        or parsed.scheme != base.scheme
-        or parsed.netloc != base.netloc
-        or not norm_path.startswith(base.path + "/")
+        parsed.scheme.lower() != base.scheme.lower()
+        or parsed.hostname is None
+        or parsed.hostname.lower() != (base.hostname or "").lower()
+        or parsed_effective_port != base_effective_port
+        or parsed.username is not None
+        or parsed.password is not None
+        or not norm_path.startswith((base.path or "") + "/")
+        or norm_path.startswith("//")
     ):
         raise ValueError("拒绝非白名单 URL 请求（仅允许官方 cxdata 接口路径）")
 
 
 def _decode_response(resp) -> dict:
-    """尝试 gzip+base64 解码，失败则回退直接 JSON；限制解压体积上限。"""
+    """解码 gzip+base64 响应，并限制解压后的最大体积。"""
+    import io
+
     text = resp.text.strip() if isinstance(resp.text, str) else ""
+    if len(text) > _MAX_ENCODED_RESPONSE:
+        raise RuntimeError("响应体过大")
+
     try:
-        raw = base64.b64decode(text)
-        decompressed = gzip.decompress(raw)
-        if len(decompressed) > _MAX_GZIP_DECOMPRESSED:
-            raise RuntimeError("响应体过大，拒绝解压")
-        return json.loads(decompressed.decode("utf-8"))
+        # 兼容 MIME/代理可能插入的普通换行，同时继续由 validate=True 拒绝
+        # 非 Base64 字符；不使用 validate=False，避免静默吞掉任意垃圾字节。
+        compact_text = text.translate(str.maketrans("", "", " \t\r\n"))
+        raw = base64.b64decode(compact_text, validate=True)
+        with gzip.GzipFile(fileobj=io.BytesIO(raw), mode="rb") as gz:
+            chunks = []
+            total = 0
+            while True:
+                chunk = gz.read(min(65536, _MAX_GZIP_DECOMPRESSED - total + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _MAX_GZIP_DECOMPRESSED:
+                    raise RuntimeError("响应体过大，拒绝解压")
+                chunks.append(chunk)
+        return json.loads(b"".join(chunks).decode("utf-8"))
     except RuntimeError:
         raise
     except Exception:
@@ -600,61 +853,143 @@ def _decode_response(resp) -> dict:
             raise RuntimeError("响应解析失败")
 
 
-def http_get(url: str, params: dict = None, include_channel: bool = True) -> dict:
+def _decode_json_response(resp) -> dict:
+    """解析普通 JSON 响应，并限制响应体最大体积。"""
+    text = resp.text.strip() if isinstance(resp.text, str) else ""
+    if len(text) > _MAX_ENCODED_RESPONSE:
+        raise RuntimeError("响应体过大")
+    try:
+        return json.loads(text)
+    except Exception:
+        raise RuntimeError("响应解析失败")
+
+
+def http_get(url: str, params: dict = None, include_channel: bool = True,
+             operation: str = None) -> dict:
     """
-    统一 HTTP GET 请求（含 gzip + base64 解码）
+    统一 HTTP GET 请求（含 gzip + base64 解码及静默审计记录）
 
     Args:
         url: 完整请求 URL
         params: 查询参数
         include_channel: 是否自动附加 requestChannel 参数（默认 True）
+        operation: 可选的审计操作名
 
     Returns:
         解析后的 JSON 数据字典
-
-    安全（缓解 SSRF）：校验 url 的 scheme/host/path，只允许官方域名且 path
-    必须以 BASE_URL 的 path 前缀开头（/cxda/），拒绝跨 path 访问（如 /cxdaevil/）。
-    显式 allow_redirects=False：拒绝跟随任何 HTTP 3xx 重定向，防止官方接口若
-    存在 open-redirect 时被 SSRF 到内网服务（若业务确需重定向，须在 hook 里
-    调用 _validate_official_url 校验目标 URL 后再跟随）。
     """
     import requests
 
     _validate_official_url(url)
-
     params = dict(params or {})
     if include_channel and REQUEST_CHANNEL:
         params["requestChannel"] = REQUEST_CHANNEL
 
+    request_params = dict(params)
+    full_response = _is_full_response_endpoint(url)
     try:
-        resp = requests.get(url, params=params, headers=HEADERS, proxies=PROXIES, timeout=30, verify=True, allow_redirects=False)
-    except Exception:
+        resp = requests.get(
+            url,
+            params=request_params,
+            headers=HEADERS,
+            proxies=PROXIES,
+            timeout=30,
+            verify=True,
+            allow_redirects=False,
+        )
+    except Exception as exc:
+        log_api_call(
+            "GET", url, request_params, operation=operation,
+            success=False, error_type=type(exc).__name__,
+        )
         raise RuntimeError("网络请求失败")
+    try:
+        data = _decode_response(resp)
+    except Exception as exc:
+        if full_response:
+            log_api_call(
+                "GET", url, request_params, operation=operation,
+                success=False, error_type=type(exc).__name__,
+                response=getattr(resp, "text", ""), include_response=True,
+            )
+        else:
+            log_api_call(
+                "GET", url, request_params, operation=operation,
+                success=False, error_type=type(exc).__name__,
+            )
+        raise
+    response_code = data.get("code") if isinstance(data, dict) else None
+    if full_response:
+        log_api_call(
+            "GET", url, request_params, operation=operation,
+            success=True, response_code=response_code,
+            response=data, include_response=True,
+        )
+    else:
+        log_api_call(
+            "GET", url, request_params, operation=operation,
+            success=True, response_code=response_code,
+        )
+    return data
 
-    return _decode_response(resp)
 
-
-def http_post_form(url: str, data: dict = None, include_channel: bool = True) -> dict:
-    """统一 HTTP POST（application/x-www-form-urlencoded），用于携带 userKey 等敏感字段。
-
-    敏感字段走 POST body 而不是 GET query string，避免落入 access log、
-    Referer、浏览器/代理历史。SSRF 校验、TLS 校验、超时策略与 http_get 一致。
-    allow_redirects=False 同样拒绝跟随重定向（缓解 SSRF via open-redirect）。
-    """
+def http_post_form(url: str, data: dict = None, include_channel: bool = True,
+                   operation: str = None) -> dict:
+    """统一 HTTPS POST 表单请求，解析普通 JSON 并静默记录调用。"""
     import requests
 
     _validate_official_url(url)
-
-    data = dict(data or {})
+    form = dict(data or {})
     if include_channel and REQUEST_CHANNEL:
-        data["requestChannel"] = REQUEST_CHANNEL
-
+        form["requestChannel"] = REQUEST_CHANNEL
+    full_response = _is_full_response_endpoint(url)
     try:
-        resp = requests.post(url, data=data, headers=HEADERS, proxies=PROXIES, timeout=30, verify=True, allow_redirects=False)
-    except Exception:
+        resp = requests.post(
+            url,
+            data=form,
+            headers={
+                **HEADERS,
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            },
+            proxies=PROXIES,
+            timeout=30,
+            verify=True,
+            allow_redirects=False,
+        )
+    except Exception as exc:
+        log_api_call(
+            "POST", url, form, operation=operation,
+            success=False, error_type=type(exc).__name__,
+        )
         raise RuntimeError("网络请求失败")
-
-    return _decode_response(resp)
+    try:
+        response_data = _decode_json_response(resp)
+    except Exception as exc:
+        if full_response:
+            log_api_call(
+                "POST", url, form, operation=operation,
+                success=False, error_type=type(exc).__name__,
+                response=getattr(resp, "text", ""), include_response=True,
+            )
+        else:
+            log_api_call(
+                "POST", url, form, operation=operation,
+                success=False, error_type=type(exc).__name__,
+            )
+        raise
+    response_code = response_data.get("code") if isinstance(response_data, dict) else None
+    if full_response:
+        log_api_call(
+            "POST", url, form, operation=operation,
+            success=True, response_code=response_code,
+            response=response_data, include_response=True,
+        )
+    else:
+        log_api_call(
+            "POST", url, form, operation=operation,
+            success=True, response_code=response_code,
+        )
+    return response_data
 
 
 # ── 输出工具 ──────────────────────────────────────────────────────────
